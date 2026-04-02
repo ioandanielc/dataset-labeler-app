@@ -1,0 +1,2003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Melt Pool Labeler</title>
+<style>
+/* ── Reset & base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f1117;
+  --surface:  #1a1d27;
+  --surface2: #222636;
+  --border:   #2e3248;
+  --text:     #e2e4ef;
+  --muted:    #7b80a0;
+  --accent:   #5b7cf6;
+  --accent-h: #7b96ff;
+  --green:    #3ecf6e;
+  --red:      #f05a5a;
+  --yellow:   #f0b429;
+
+  --c-unlabeled:   #444860;
+  --c-unsure:      #a855f7;
+  --c-bug:         #f05a5a;
+  --c-empty:       #64748b;
+  --c-forming:     #3b82f6;
+  --c-convection:  #10b981;
+  --c-keyhole:     #f59e0b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Header ───────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  z-index: 100;
+}
+header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+header .spacer { flex: 1; }
+#global-stats { font-size: 13px; color: var(--muted); }
+#global-stats span { color: var(--text); font-weight: 500; }
+
+#lb-back       { display: none; }
+#lb-exp-info   { display: none; font-size: 12px; color: var(--muted); }
+#lb-exp-info .param { font-family: monospace; color: var(--text); }
+#lb-booleans   { display: none; gap: 8px; align-items: center; }
+#lb-progress-header { display: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
+#lb-progress-header span { color: var(--text); font-weight: 500; }
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: background .15s, border-color .15s;
+  white-space: nowrap; flex-shrink: 0;
+}
+.btn:hover    { background: var(--border); border-color: #3e4460; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary  { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-h); border-color: var(--accent-h); }
+.btn.sm  { padding: 4px 10px; font-size: 12px; }
+.btn.xs  { padding: 2px 8px;  font-size: 11px; }
+.btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.bool-group { display: flex; flex-direction: column; gap: 2px; }
+.bool-group label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.bool-btns { display: flex; gap: 4px; }
+
+/* ── Dashboard layout ─────────────────────────────────────────── */
+#main-wrapper { flex: 1; overflow-y: auto; padding: 24px; }
+.inner        { max-width: 1200px; margin: 0 auto; }
+.toolbar      { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.toolbar h2   { font-size: 16px; font-weight: 600; flex: 1; }
+#scan-status  { font-size: 12px; color: var(--muted); min-width: 120px; text-align: right; }
+
+.exp-table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+.exp-table thead th { padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--surface2); border-bottom: 1px solid var(--border); }
+.exp-table tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+.exp-table tbody tr:last-child { border-bottom: none; }
+.exp-table tbody tr:hover { background: var(--surface2); }
+.exp-table td { padding: 10px 14px; vertical-align: middle; }
+
+.param { font-family: "JetBrains Mono","Fira Mono",monospace; font-size: 12px; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.badge.yes   { background: #16301f; color: var(--green); }
+.badge.no    { background: #2d1a1a; color: var(--red); }
+.badge.unset { background: var(--surface2); color: var(--muted); }
+
+.progress-wrap  { display: flex; align-items: center; gap: 10px; }
+.progress-bar   { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; min-width: 80px; }
+.progress-fill  { height: 100%; border-radius: 3px; background: var(--accent); transition: width .3s; }
+.progress-fill.complete { background: var(--green); }
+.progress-pct   { font-size: 12px; color: var(--muted); width: 38px; text-align: right; }
+.actions        { display: flex; gap: 6px; }
+
+/* ── Empty / loading ──────────────────────────────────────────── */
+.empty-state  { text-align: center; padding: 60px 20px; color: var(--muted); }
+.empty-state p { margin-top: 8px; font-size: 13px; }
+.spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Toast ────────────────────────────────────────────────────── */
+#toast {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 18px; font-size: 13px;
+  opacity: 0; transition: opacity .2s, transform .2s;
+  pointer-events: none; z-index: 9999; white-space: nowrap;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Label view ───────────────────────────────────────────────── */
+#view-label { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+#view-label.active { display: flex; }
+
+.lb-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Image area */
+.lb-image-area {
+  flex: 1; background: #000; display: flex;
+  align-items: center; justify-content: center;
+  overflow: hidden; position: relative;
+}
+.lb-image-area img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+#lb-no-image { color: var(--muted); font-size: 13px; text-align: center; }
+#lb-timestep-badge {
+  position: absolute; bottom: 10px; left: 12px;
+  background: rgba(0,0,0,.65); color: var(--muted);
+  font-size: 11px; font-family: monospace;
+  padding: 3px 8px; border-radius: 4px;
+}
+#lb-missing-badge {
+  display: none; position: absolute; top: 10px; right: 12px;
+  background: #2d1a1a; color: var(--red); font-size: 11px; font-weight: 600;
+  padding: 3px 8px; border-radius: 4px;
+}
+#lb-filter-badge {
+  position: absolute; top: 10px; left: 12px;
+  background: rgba(91,124,246,.2); color: var(--accent);
+  font-size: 11px; padding: 3px 8px; border-radius: 4px;
+  display: none;
+}
+#lb-conflict-badge {
+  display: none; position: absolute; bottom: 32px; left: 12px;
+  background: rgba(0,0,0,.75); border: 1px solid var(--yellow);
+  border-radius: 5px; padding: 4px 10px; font-size: 12px;
+  font-weight: 600;
+}
+
+/* Sidebar */
+.lb-sidebar {
+  width: 230px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* Sidebar header */
+.lb-sidebar-hdr {
+  padding: 8px 12px 6px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+
+/* Timesteps tab */
+#lb-tab-ts { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.lb-filter-bar {
+  display: flex; gap: 4px; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.lb-filter-btn {
+  flex: 1; padding: 4px 0; font-size: 11px; font-weight: 600;
+  border-radius: 5px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: all .15s; text-align: center;
+}
+.lb-filter-btn:hover { color: var(--text); background: var(--surface2); }
+.lb-filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+#lb-sidebar-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+.lb-ts-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px; cursor: pointer;
+  transition: background .1s; font-size: 12px;
+}
+.lb-ts-item:hover { background: var(--surface2); }
+.lb-ts-item.current { background: var(--surface2); }
+.lb-ts-item.current .lb-ts-num { color: var(--text); font-weight: 600; }
+.lb-ts-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.lb-ts-num { color: var(--muted); font-family: monospace; }
+.lb-ts-lbl { color: var(--muted); font-size: 10px; margin-left: auto; }
+
+/* By-label left sidebar */
+#lb-agg-panel {
+  display: none; flex-shrink: 0;
+  width: 230px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  flex-direction: column;
+  overflow: hidden;
+}
+#lb-agg-panel.open { display: flex; }
+
+.lb-agg-header {
+  display: flex; align-items: center; padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-shrink: 0;
+  font-size: 11px; font-weight: 600; gap: 6px;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+}
+.toggle-pill {
+  padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); font-size: 10px; font-weight: 600;
+  cursor: pointer; transition: all .2s;
+}
+.toggle-pill.on { background: rgba(62,207,110,.1); border-color: var(--green); color: var(--green); }
+
+#lb-agg-groups { flex: 1; overflow-y: auto; }
+
+.lb-group { border-bottom: 1px solid var(--border); }
+.lb-group:last-child { border-bottom: none; }
+.lb-group-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; cursor: pointer; user-select: none;
+  transition: background .1s;
+}
+.lb-group-header:hover { background: var(--surface2); }
+.lb-group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.lb-group-name { font-size: 12px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-group-count {
+  font-size: 11px; color: var(--muted); font-family: monospace;
+  background: var(--surface2); padding: 1px 6px; border-radius: 10px; flex-shrink: 0;
+}
+.lb-group-chevron { font-size: 10px; color: var(--muted); transition: transform .15s; flex-shrink: 0; }
+.lb-group-header.open .lb-group-chevron { transform: rotate(90deg); }
+
+/* Expanded group body: morph pinned at top, thumbs scrollable below */
+.lb-group-body { display: none; flex-direction: column; }
+.lb-group-body.open { display: flex; }
+
+/* Morph section — pinned, never scrolls away */
+.lb-morph-section {
+  flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.lb-morph-img {
+  width: 100%; height: 100px; object-fit: contain;
+  border-radius: 4px; background: #111; border: 1px solid var(--border);
+  cursor: pointer;
+}
+.lb-morph-placeholder {
+  width: 100%; height: 80px;
+  border: 1px dashed var(--border); border-radius: 4px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--muted); font-size: 10px; gap: 4px;
+}
+.lb-morph-meta { font-size: 10px; color: var(--muted); text-align: center; line-height: 1.4; }
+
+/* Morph button */
+.btn-morph {
+  font-size: 10px; padding: 2px 10px; border-radius: 4px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); cursor: pointer; white-space: nowrap;
+  transition: all .15s;
+}
+.btn-morph:hover   { color: var(--text); border-color: var(--muted); }
+.btn-morph.ready   { color: var(--green); border-color: var(--green); background: rgba(62,207,110,.08); }
+.btn-morph.stale   { color: var(--yellow); border-color: var(--yellow); background: rgba(240,180,41,.08); }
+.btn-morph.computing { color: var(--accent); border-color: var(--accent); cursor: default; }
+
+/* Thumbnails — scrollable */
+.lb-group-thumbs {
+  overflow-y: auto; max-height: 200px;
+  padding: 6px 8px;
+  display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start;
+}
+.lb-thumb {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  cursor: pointer; border-radius: 4px; padding: 2px;
+  border: 2px solid transparent; transition: border-color .1s;
+}
+.lb-thumb:hover { border-color: var(--border); }
+.lb-thumb.current { border-color: var(--accent); }
+.lb-thumb img { width: 60px; height: 42px; object-fit: cover; border-radius: 3px; background: #111; }
+.lb-thumb-ts { font-size: 9px; color: var(--muted); font-family: monospace; }
+#btn-agg-toggle.active { background: rgba(91,124,246,.15); border-color: var(--accent); color: var(--accent); }
+
+/* ── Comparison view ──────────────────────────────────────────── */
+#view-compare { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+#view-compare.active { display: flex; }
+.cmp-body { display: flex; flex: 1; overflow: hidden; }
+.cmp-panel {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  padding: 32px 24px; gap: 16px; overflow-y: auto; background: var(--bg);
+}
+.cmp-label-hdr { font-size: 20px; font-weight: 700; letter-spacing: .02em; }
+.cmp-morph-box {
+  width: 100%; max-width: 560px; aspect-ratio: 4/3;
+  background: #111; border: 1px solid var(--border); border-radius: 10px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  overflow: hidden; gap: 8px;
+}
+.cmp-morph-box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cmp-meta { font-size: 13px; color: var(--muted); text-align: center; }
+
+/* Stage badges */
+.stage-r1   { color: var(--muted); }
+.stage-r2   { color: var(--accent); }
+.stage-corr { color: var(--yellow); }
+.stage-done { color: var(--green); }
+
+/* Bottom */
+.lb-bottom { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--surface); }
+#lb-timeline { height: 18px; display: flex; cursor: pointer; border-bottom: 1px solid var(--border); }
+.lb-tl-seg { flex: 1; height: 100%; transition: opacity .1s; position: relative; }
+.lb-tl-seg:hover { opacity: .75; }
+.lb-tl-seg.current::after {
+  content: ""; position: absolute; top: 0; left: 50%;
+  transform: translateX(-50%); width: 2px; height: 100%;
+  background: #fff; opacity: .9;
+}
+#lb-legend { display: flex; align-items: center; gap: 6px; padding: 8px 14px; flex-wrap: wrap; }
+.lb-legend-item {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--muted); padding: 3px 8px;
+  border-radius: 5px; border: 1px solid transparent; cursor: default;
+}
+.lb-legend-item.current-label { border-color: var(--border); background: var(--surface2); color: var(--text); }
+.lb-legend-key { font-size: 11px; font-weight: 700; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-family: monospace; color: var(--text); }
+.lb-legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+#lb-nav-hint { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.kb { font-size: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; font-family: monospace; color: var(--muted); }
+#lb-legend-spacer { flex: 1; }
+#btn-agg-toggle { margin-left: auto; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ───────────────────────────────────────────────── -->
+  <header>
+    <h1 id="hdr-title">Melt Pool Labeler</h1>
+    <button class="btn sm" id="lb-back">← Dashboard</button>
+    <div id="lb-exp-info"></div>
+    <div class="spacer"></div>
+    <div id="lb-booleans">
+      <div class="bool-group">
+        <label>Bug Free</label>
+        <div class="bool-btns">
+          <button class="btn xs" id="btn-bf-yes"  onclick="setBool('bug_free', true)">Yes</button>
+          <button class="btn xs" id="btn-bf-no"   onclick="setBool('bug_free', false)">No</button>
+          <button class="btn xs" id="btn-bf-null" onclick="setBool('bug_free', null)">—</button>
+        </div>
+      </div>
+      <div class="bool-group">
+        <label>Finished</label>
+        <div class="bool-btns">
+          <button class="btn xs" id="btn-cf-yes"  onclick="setBool('correctly_finished', true)">Yes</button>
+          <button class="btn xs" id="btn-cf-no"   onclick="setBool('correctly_finished', false)">No</button>
+          <button class="btn xs" id="btn-cf-null" onclick="setBool('correctly_finished', null)">—</button>
+        </div>
+      </div>
+    </div>
+    <button class="btn xs" id="lb-reset-btn" style="display:none" onclick="resetCurrentExperiment()">Reset Pass</button>
+    <button class="btn xs" id="lb-agree-btn" style="display:none" onclick="checkAgreement()">Check Agreement ✓</button>
+    <div id="lb-progress-header"></div>
+    <div id="global-stats">Loading…</div>
+  </header>
+
+  <!-- ── Dashboard ────────────────────────────────────────────── -->
+  <div id="main-wrapper">
+    <div class="inner">
+      <div class="toolbar">
+        <h2>Experiments</h2>
+        <span id="scan-status"></span>
+        <span id="data-root-display" style="font-size:11px;color:var(--muted);font-family:monospace;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <button class="btn sm" onclick="showSetPathModal()" id="btn-set-path" title="Change dataset folder">📁 Path</button>
+        <button class="btn" id="btn-label-next" onclick="labelNext()">Label Next →</button>
+        <button class="btn" onclick="showExportDialog()">Export CSV</button>
+        <button class="btn" onclick="showImportDialog()">Import Labels</button>
+        <button class="btn" style="color:var(--red);border-color:var(--red)" onclick="showTotalResetModal()">Total Reset</button>
+        <button class="btn" id="btn-scan">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M23 4v6h-6M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+          </svg>
+          Re-scan
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <input id="dash-search" type="text" placeholder="Search name / hash…"
+               oninput="applyDashFilter()"
+               style="padding:6px 12px;background:var(--surface2);border:1px solid var(--border);
+                      border-radius:6px;color:var(--text);font-size:13px;outline:none;width:220px" />
+        <div style="display:flex;gap:4px" id="stage-filter-btns">
+          <button class="lb-filter-btn active" data-stage="all"        onclick="setDashStageFilter('all')">All</button>
+          <button class="lb-filter-btn"        data-stage="round_1"    onclick="setDashStageFilter('round_1')">Round 1</button>
+          <button class="lb-filter-btn"        data-stage="round_2"    onclick="setDashStageFilter('round_2')">Round 2</button>
+          <button class="lb-filter-btn"        data-stage="correction" onclick="setDashStageFilter('correction')">Correction</button>
+          <button class="lb-filter-btn"        data-stage="done"       onclick="setDashStageFilter('done')">Done</button>
+        </div>
+        <span id="dash-filter-count" style="font-size:12px;color:var(--muted);margin-left:4px"></span>
+      </div>
+      <!-- Shown only when no data root has been configured yet -->
+      <div id="setup-banner" style="display:none;border:2px dashed var(--border);border-radius:10px;padding:40px 32px;text-align:center;margin-bottom:20px">
+        <div style="font-size:32px;margin-bottom:12px">📁</div>
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:8px">No dataset configured</h3>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
+          Paste the path to your dataset folder to get started.<br>
+          The path will be saved and remembered on future launches.
+        </p>
+        <button class="btn primary" onclick="showSetPathModal()">📁 Set Dataset Path</button>
+      </div>
+
+      <div id="exp-container">
+        <div class="empty-state"><div class="spinner"></div><p>Loading experiments…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Label / Review View ──────────────────────────────────── -->
+  <div id="view-label">
+    <div class="lb-body">
+
+      <!-- By-label left sidebar -->
+      <div id="lb-agg-panel">
+        <div class="lb-agg-header">
+          By Label
+          <span style="flex:1"></span>
+          <span style="font-size:10px;color:var(--muted);font-weight:400">Auto-Morph</span>
+          <button class="toggle-pill" id="btn-bg-compute" onclick="toggleBgCompute()">OFF</button>
+        </div>
+        <div id="lb-agg-groups"></div>
+      </div>
+
+      <!-- Image -->
+      <div class="lb-image-area">
+        <img id="lb-img" src="" alt="" style="display:none" />
+        <div id="lb-no-image">No image</div>
+        <div id="lb-timestep-badge">ts: —</div>
+        <div id="lb-missing-badge">MISSING</div>
+        <div id="lb-filter-badge"></div>
+        <div id="lb-conflict-badge"></div>
+      </div>
+
+      <!-- Timesteps sidebar -->
+      <div class="lb-sidebar">
+        <div class="lb-sidebar-hdr">Timesteps</div>
+        <div class="lb-filter-bar">
+          <button class="lb-filter-btn active" id="filter-all"       onclick="setFilter('all')">All</button>
+          <button class="lb-filter-btn"        id="filter-unlabeled" onclick="setFilter('unlabeled')">Unlabeled</button>
+          <button class="lb-filter-btn"        id="filter-conflicts" onclick="setFilter('conflicts')" style="display:none">Conflicts</button>
+        </div>
+        <div id="lb-sidebar-list"></div>
+      </div>
+
+    </div><!-- /.lb-body -->
+
+    <div class="lb-bottom">
+      <div id="lb-timeline"></div>
+      <div id="lb-legend"></div>
+    </div>
+  </div>
+
+  <!-- ── Comparison View ──────────────────────────────────────── -->
+  <div id="view-compare">
+    <div class="cmp-body">
+      <!-- Convection panel -->
+      <div class="cmp-panel">
+        <div class="cmp-label-hdr" style="color:var(--c-convection)">Convection</div>
+        <div class="cmp-morph-box" id="cmp-conv-box">
+          <div class="lb-morph-placeholder"><span>No morph yet</span></div>
+        </div>
+        <div class="cmp-meta" id="cmp-conv-meta">—</div>
+        <button class="btn sm" id="btn-cmp-conv">⊕ Compute Morph</button>
+      </div>
+      <div style="width:1px;background:var(--border);flex-shrink:0"></div>
+      <!-- Keyhole panel -->
+      <div class="cmp-panel">
+        <div class="cmp-label-hdr" style="color:var(--c-keyhole)">Keyhole</div>
+        <div class="cmp-morph-box" id="cmp-key-box">
+          <div class="lb-morph-placeholder"><span>No morph yet</span></div>
+        </div>
+        <div class="cmp-meta" id="cmp-key-meta">—</div>
+        <button class="btn sm" id="btn-cmp-key">⊕ Compute Morph</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /#app -->
+<div id="toast"></div>
+
+<!-- ── Export CSV Modal ──────────────────────────────────────── -->
+<div id="modal-export" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:380px;width:90%">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:16px">Export CSV</h3>
+    <div style="margin-bottom:20px;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="export-which" value="all" checked style="margin-top:2px">
+        <div><strong>All columns</strong><br><span style="color:var(--muted);font-size:12px">label_1, label_2, label_final</span></div>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="export-which" value="r1" style="margin-top:2px">
+        <div><strong>Round 1 only</strong><br><span style="color:var(--muted);font-size:12px">label_1</span></div>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="export-which" value="r2" style="margin-top:2px">
+        <div><strong>Round 2 only</strong><br><span style="color:var(--muted);font-size:12px">label_2</span></div>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="export-which" value="voting" style="margin-top:2px">
+        <div><strong>Voting (final)</strong><br><span style="color:var(--muted);font-size:12px">label_final — resolved labels after voting</span></div>
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="document.getElementById('modal-export').style.display='none'">Cancel</button>
+      <button class="btn sm primary" onclick="executeExport()">Download</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Total Reset Modal ─────────────────────────────────────── -->
+<div id="modal-total-reset" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:400px;width:90%">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--red)">Total Reset</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+      This will erase <strong style="color:var(--text)">all labels</strong> across every experiment and reset all stages to Round 1.
+      The <strong style="color:var(--text)">Bug Free</strong> and <strong style="color:var(--text)">Finished</strong> flags will <em>not</em> be reset.
+      This cannot be undone.<br><br>
+      Type <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;font-family:monospace">yes, i want to reset</code> to confirm.
+    </p>
+    <input id="total-reset-confirm" type="text" placeholder="yes, i want to reset"
+           style="width:100%;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);
+                  border-radius:6px;color:var(--text);font-size:13px;outline:none;margin-bottom:16px"
+           oninput="document.getElementById('btn-total-reset-confirm').disabled = this.value !== 'yes, i want to reset'" />
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="document.getElementById('modal-total-reset').style.display='none'">Cancel</button>
+      <button class="btn sm" id="btn-total-reset-confirm" disabled
+              style="background:var(--red);border-color:var(--red);color:#fff"
+              onclick="executeTotalReset()">Reset Everything</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Import Labels Modal ───────────────────────────────────── -->
+<div id="modal-import" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:440px;width:90%">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px">Import Labels</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+      Upload a CSV with columns: <code style="background:var(--surface2);padding:2px 5px;border-radius:3px;font-family:monospace">name, timestep, label</code>.<br>
+      <code style="background:var(--surface2);padding:2px 5px;border-radius:3px;font-family:monospace">name</code> = experiment folder name (as shown in the Name column).
+    </p>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Import into pass</label>
+      <div style="display:flex;gap:12px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="radio" name="import-pass" value="1" checked> Round 1
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="radio" name="import-pass" value="2"> Round 2
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="radio" name="import-pass" value="voting"> Voting
+        </label>
+      </div>
+    </div>
+    <input id="import-file-input" type="file" accept=".csv"
+           style="font-size:13px;color:var(--text);margin-bottom:16px;display:block" />
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="document.getElementById('modal-import').style.display='none'">Cancel</button>
+      <button class="btn sm primary" onclick="executeImport()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Set Data Path Modal ───────────────────────────────────── -->
+<div id="modal-set-path" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:520px;width:90%">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px">Set Dataset Path</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+      Paste the full path to the folder that contains your simulation sub-folders.<br>
+      This path is saved and reused automatically on next launch.
+    </p>
+    <input id="set-path-input" type="text" placeholder="/path/to/your/dataset"
+           style="width:100%;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);
+                  border-radius:6px;color:var(--text);font-size:13px;outline:none;margin-bottom:8px;font-family:monospace"
+           oninput="document.getElementById('set-path-error').textContent=''"
+           onkeydown="if(event.key==='Enter')confirmSetPath()" />
+    <div id="set-path-error" style="font-size:12px;color:var(--red);min-height:18px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="document.getElementById('modal-set-path').style.display='none'">Cancel</button>
+      <button class="btn sm primary" onclick="confirmSetPath()">Apply &amp; Scan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Experiment Done Modal ──────────────────────────────────── -->
+<div id="modal-exp-done" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--green);border-radius:12px;padding:28px 32px;max-width:400px;width:90%;text-align:center">
+    <div style="font-size:28px;margin-bottom:8px">✓</div>
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--green)" id="exp-done-title">Experiment Complete</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px" id="exp-done-msg">All labels are finalised.</p>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button class="btn sm" onclick="document.getElementById('modal-exp-done').style.display='none'">Stay Here</button>
+      <button class="btn sm primary" onclick="document.getElementById('modal-exp-done').style.display='none';closeLabelView()">← Back to Dashboard</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Round Done Modal ──────────────────────────────────── -->
+<div id="modal-round-done" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--accent);border-radius:12px;padding:28px 32px;max-width:420px;width:90%;text-align:center">
+    <div style="font-size:28px;margin-bottom:8px">✓</div>
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--accent)" id="round-done-title">Round Complete</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px" id="round-done-msg">All frames are labeled.</p>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="btn sm" onclick="document.getElementById('modal-round-done').style.display='none'">Stay Here</button>
+      <button class="btn sm" onclick="document.getElementById('modal-round-done').style.display='none';closeLabelView()">← Dashboard</button>
+      <button class="btn sm primary" id="round-done-action">Switch</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LABELS = [
+  "Unlabeled","Unsure","Screenshot Bug",
+  "Initial Emptiness","Forming Phase","Convection","Keyhole"
+];
+
+const LABEL_COLOR = {
+  "Unlabeled":         "var(--c-unlabeled)",
+  "Unsure":            "var(--c-unsure)",
+  "Screenshot Bug":    "var(--c-bug)",
+  "Initial Emptiness": "var(--c-empty)",
+  "Forming Phase":     "var(--c-forming)",
+  "Convection":        "var(--c-convection)",
+  "Keyhole":           "var(--c-keyhole)",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function api(method, path, body) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`${method} ${path} → ${r.status}`);
+  return r.json();
+}
+const get   = p      => api("GET",   p);
+const post  = (p, b) => api("POST",  p, b ?? {});
+const patch = (p, b) => api("PATCH", p, b);
+
+let _toastTimer;
+function toast(msg, ms = 2500) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+function boolBadge(v) {
+  if (v === true)  return '<span class="badge yes">Yes</span>';
+  if (v === false) return '<span class="badge no">No</span>';
+  return '<span class="badge unset">—</span>';
+}
+function progressBar(pct) {
+  const cls = pct >= 100 ? "complete" : "";
+  return `<div class="progress-wrap">
+    <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div>
+    <span class="progress-pct">${pct}%</span></div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Global stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function refreshGlobalStats() {
+  try {
+    const p = await get("/api/progress");
+    document.getElementById("global-stats").innerHTML =
+      `<span>${p.complete}/${p.total}</span> complete &nbsp;·&nbsp; <span>${p.pct}%</span>`;
+  } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function loadDashboard() {
+  const c = document.getElementById("exp-container");
+  c.innerHTML = '<div class="empty-state"><div class="spinner"></div><p>Loading…</p></div>';
+
+  // Try to fetch config (non-fatal if endpoint missing)
+  try {
+    const cfg = await get("/api/config");
+    const banner = document.getElementById("setup-banner");
+    const rootEl = document.getElementById("data-root-display");
+    const labelNextBtn = document.getElementById("btn-label-next");
+    if (cfg.configured && cfg.root) {
+      if (banner) banner.style.display = "none";
+      if (rootEl) rootEl.textContent = cfg.root;
+      if (labelNextBtn) labelNextBtn.style.display = "";
+    } else {
+      if (banner) banner.style.display = "";
+      if (rootEl) rootEl.textContent = "No path set";
+      if (labelNextBtn) labelNextBtn.style.display = "none";
+      c.innerHTML = "";
+      return;
+    }
+  } catch {
+    // /api/config unavailable (old server) — hide banner, proceed normally
+    const banner = document.getElementById("setup-banner");
+    if (banner) banner.style.display = "none";
+  }
+
+  try {
+    const exps = await get("/api/experiments");
+    allExperiments = exps;
+    applyDashFilter();
+    refreshGlobalStats();
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
+  }
+}
+
+// ── Path configuration ────────────────────────────────────────────────────────
+
+function showSetPathModal() {
+  const inp = document.getElementById("set-path-input");
+  const rootEl = document.getElementById("data-root-display");
+  inp.value = (rootEl?.textContent !== "No path set" ? rootEl?.textContent : "") ?? "";
+  document.getElementById("set-path-error").textContent = "";
+  const m = document.getElementById("modal-set-path");
+  m.style.display = "flex";
+  setTimeout(() => inp.focus(), 50);
+}
+
+async function confirmSetPath() {
+  const inp = document.getElementById("set-path-input");
+  const errEl = document.getElementById("set-path-error");
+  const path = inp.value.trim();
+  if (!path) { errEl.textContent = "Please enter a path."; return; }
+  errEl.textContent = "";
+  const btn = document.querySelector("#modal-set-path .btn.primary");
+  btn.disabled = true;
+  btn.textContent = "Applying…";
+  try {
+    const r = await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: path }),
+    });
+    const j = await r.json();
+    if (!r.ok) { errEl.textContent = j.error ?? "Unknown error"; btn.disabled = false; btn.textContent = "Apply & Scan"; return; }
+    document.getElementById("modal-set-path").style.display = "none";
+    toast(`Path set — ${j.scan.experiments_seen} experiments found`);
+    loadDashboard();
+  } catch(e) {
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Apply & Scan";
+  }
+}
+
+function showExpDoneModal(title, msg) {
+  document.getElementById("exp-done-title").textContent = title;
+  document.getElementById("exp-done-msg").textContent   = msg;
+  document.getElementById("modal-exp-done").style.display = "flex";
+}
+
+function stageBadge(stage) {
+  const map = {
+    round_1:    '<span class="stage-r1">Round 1</span>',
+    round_2:    '<span class="stage-r2">Round 2</span>',
+    correction: '<span class="stage-corr">Correction</span>',
+    done:       '<span class="stage-done">Done</span>',
+  };
+  return map[stage] ?? '<span class="stage-r1">Round 1</span>';
+}
+
+function miniBar(pct, color) {
+  return `<div style="display:flex;align-items:center;gap:6px">
+    <div style="flex:1;height:5px;background:var(--surface2);border-radius:3px;overflow:hidden;min-width:50px">
+      <div style="width:${Math.min(pct,100)}%;height:100%;background:${color};border-radius:3px;transition:width .3s"></div>
+    </div>
+    <span style="font-size:11px;color:var(--muted);width:34px;text-align:right">${pct}%</span>
+  </div>`;
+}
+
+let dashStageFilter = "all";
+
+function setDashStageFilter(stage) {
+  dashStageFilter = stage;
+  document.querySelectorAll("#stage-filter-btns .lb-filter-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.stage === stage);
+  });
+  applyDashFilter();
+}
+
+function applyDashFilter() {
+  const q = (document.getElementById("dash-search")?.value ?? "").toLowerCase().trim();
+  const filtered = allExperiments.filter(exp => {
+    if (dashStageFilter !== "all" && exp.labeling_stage !== dashStageFilter) return false;
+    if (q) {
+      const haystack = ((exp.name || "") + " " + (exp.hash || "") + " " +
+                        exp.P + " " + exp.VX + " " + exp.LS + " " + exp.ST).toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+  const countEl = document.getElementById("dash-filter-count");
+  if (countEl) {
+    countEl.textContent = filtered.length < allExperiments.length
+      ? `${filtered.length} / ${allExperiments.length}` : "";
+  }
+  renderDashboard(filtered);
+}
+
+function renderDashboard(exps) {
+  const c = document.getElementById("exp-container");
+  if (!exps.length) {
+    c.innerHTML = '<div class="empty-state"><p>No experiments match the current filter.</p></div>';
+    return;
+  }
+  const rows = exps.map(exp => {
+    const p = exp.progress;
+    const stage = exp.labeling_stage ?? 'round_1';
+    const r1 = p.pass1_pct ?? 0;
+    const r2 = p.pass2_pct ?? 0;
+    // Once voting has started (correction/done), R1 and R2 are locked — use Review instead
+    const votingStarted = stage === 'correction' || stage === 'done';
+    // R2 only accessible when Round 1 is complete (or already in round_2), but not after voting started
+    const r2Ready = !votingStarted && (r1 >= 100 || stage === 'round_2');
+    // Voting available when both passes fully labeled, or already in correction/done
+    const votingReady = (r1 >= 100 && r2 >= 100) || votingStarted;
+    const votingActive = votingStarted;
+    const votingLabel  = stage === 'correction' ? 'Voting…' : 'Voting';
+
+    // Agreement cell
+    let agreeCell = '<span style="color:var(--muted);font-size:11px">—</span>';
+    if (p.agree_pct != null) {
+      const kap = p.kappa != null ? `<br><span style="font-size:10px;color:var(--muted)">κ=${p.kappa}</span>` : '';
+      const col = p.agree_pct >= 90 ? 'var(--green)' : p.agree_pct >= 70 ? 'var(--yellow)' : 'var(--red)';
+      agreeCell = `<span style="color:${col};font-size:12px;font-weight:600">${p.agree_pct}%</span>${kap}`;
+    }
+
+    return `<tr>
+      <td>
+        <span class="param" style="font-size:11px">${exp.name || ''}</span>
+        ${exp.hash ? `<br><span style="font-size:10px;color:var(--muted);font-family:monospace">#${exp.hash}</span>` : ''}
+      </td>
+      <td><span class="param">${exp.P}</span></td>
+      <td><span class="param">${exp.VX}</span></td>
+      <td><span class="param">${exp.LS}</span></td>
+      <td><span class="param">${exp.ST}</span></td>
+      <td>${boolBadge(exp.bug_free)}</td>
+      <td>${boolBadge(exp.correctly_finished)}</td>
+      <td style="min-width:110px">${miniBar(r1, 'var(--accent)')}</td>
+      <td style="min-width:110px">${miniBar(r2, 'var(--green)')}</td>
+      <td style="text-align:center">${agreeCell}</td>
+      <td><div class="actions">
+        <button class="btn sm ${stage === 'round_1' ? 'primary' : ''}"
+                onclick="openRound(${exp.id}, 1)"
+                ${votingStarted ? 'disabled title="Voting started — use Voting to edit"' : 'title="Label Round 1"'}>R1</button>
+        <button class="btn sm ${stage === 'round_2' ? 'primary' : ''}"
+                onclick="openRound(${exp.id}, 2)"
+                ${!r2Ready ? `disabled title="${votingStarted ? 'Voting started — use Voting to edit' : 'Complete Round 1 first'}"` : ''}>R2</button>
+        <button class="btn sm ${votingActive ? 'primary' : ''}"
+                onclick="openVoting(${exp.id})"
+                ${votingReady ? '' : 'disabled title="Complete both rounds first"'}>${votingLabel}</button>
+        ${stage === 'done' ? `<button class="btn sm primary" onclick="openReview(${exp.id})" title="Review final labels">Review</button>` : ''}
+        <button class="btn sm" onclick="openComparison(${exp.id})" title="Compare Convection vs Keyhole morphs">⊡ Cmp</button>
+        <button class="btn sm" onclick="resetExperiment(${exp.id})" title="Full reset" style="color:var(--muted)">↺</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+  c.innerHTML = `<table class="exp-table">
+    <thead><tr>
+      <th>Name</th><th>P</th><th>VX</th><th>LS</th><th>ST</th>
+      <th>Bug Free</th><th>Finished</th>
+      <th style="min-width:120px">Round 1</th>
+      <th style="min-width:120px">Round 2</th>
+      <th>Agreement</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function resetExperiment(expId) {
+  if (!confirm("Reset ALL labels in this experiment to Unlabeled? This cannot be undone.")) return;
+  try {
+    const r = await post(`/api/experiments/${expId}/reset`);
+    toast(`Reset ${r.reset} frames to Unlabeled`);
+    loadDashboard();
+  } catch (e) { toast("Reset failed: " + e.message); }
+}
+
+async function openRound(expId, roundNum) {
+  // Switch to the correct pass on the server before opening the view
+  const exp = allExperiments.find(e => e.id === expId);
+  const stage = exp?.labeling_stage ?? 'round_1';
+  try {
+    if (roundNum === 1 && stage !== 'round_1') {
+      await post(`/api/experiments/${expId}/switch_to_round_1`);
+    } else if (roundNum === 2 && stage !== 'round_2') {
+      await post(`/api/experiments/${expId}/start_round_2`);
+    }
+    await openMode(expId, false);
+  } catch(e) { toast("Failed to open: " + e.message); }
+}
+
+async function openVoting(expId) {
+  const exp = allExperiments.find(e => e.id === expId);
+  const stage = exp?.labeling_stage ?? 'round_1';
+  try {
+    if (stage !== 'correction' && stage !== 'done') {
+      // Run agreement check — auto-resolves agreements, sets stage to correction or done
+      const r = await post(`/api/experiments/${expId}/check_agreement`);
+      if (r.stage === 'done') {
+        toast('Perfect agreement! All labels match — no voting needed.');
+        loadDashboard();
+        return;   // Nothing to do, just refresh dashboard
+      }
+      toast(`${r.conflict_count} conflict${r.conflict_count !== 1 ? 's' : ''} found — resolve them`);
+    }
+    await openMode(expId, false);
+  } catch(e) { toast("Failed: " + e.message); }
+}
+
+function labelNext() {
+  // Prefer experiments that still need round 1
+  const needsR1 = allExperiments.find(e => (e.progress.pass1_pct ?? 0) < 100 && e.progress.total > 0);
+  if (needsR1) { openRound(needsR1.id, 1); return; }
+  // Then round 2
+  const needsR2 = allExperiments.find(e => (e.progress.pass2_pct ?? 0) < 100 && e.progress.total > 0);
+  if (needsR2) { openRound(needsR2.id, 2); return; }
+  toast("All experiments fully labeled!");
+}
+
+document.getElementById("btn-scan").addEventListener("click", async () => {
+  const st  = document.getElementById("scan-status");
+  const btn = document.getElementById("btn-scan");
+  btn.disabled = true; st.textContent = "Scanning…";
+  try {
+    const s = await post("/api/scan");
+    st.textContent = `+${s.frames_added} added, ${s.frames_missing} missing`;
+    toast(`Scan complete — ${s.experiments_seen} experiments, +${s.frames_added} new frames`);
+    loadDashboard();
+  } catch (e) {
+    st.textContent = "Scan failed"; toast("Scan failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { st.textContent = ""; }, 5000);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Label / Review state
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Persisted experiment list (for Label Next)
+let allExperiments = [];
+
+const lb = {
+  expId:     null,
+  exp:       null,
+  frames:    [],   // all frames sorted by timestep
+  idx:       0,    // index in lb.frames
+  readOnly:  false,
+  filter:    "all",  // "all" | "unlabeled"
+  aggOpen:   false,
+  openGroups: new Set(),
+  roundCompleteShown: false,
+};
+
+// ── Filtered frame set ────────────────────────────────────────────────────────
+
+function filteredFrames() {
+  if (lb.filter === "unlabeled")
+    return lb.frames.filter(f => f.label === "Unlabeled" && !f.missing);
+  if (lb.filter === "conflicts")
+    return lb.frames.filter(f => f.label_1 !== f.label_2 && f.label_final == null && !f.missing);
+  return lb.frames;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Open / close
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function openLabel(expId)  { await openMode(expId, false); }
+async function openReview(expId) { await openMode(expId, true); }
+
+async function openMode(expId, readOnly) {
+  lb.expId    = expId;
+  lb.readOnly = readOnly;
+  lb.filter      = "all";
+  lb.aggOpen     = false;
+  lb.openGroups.clear();
+  lb.roundCompleteShown = false;
+  morphStatus    = {};
+  if (morphPollTimer) { clearInterval(morphPollTimer); morphPollTimer = null; }
+
+  try {
+    const [exp, frames] = await Promise.all([
+      get(`/api/experiments/${expId}`),
+      get(`/api/experiments/${expId}/frames`),
+    ]);
+    lb.exp    = exp;
+    lb.frames = frames;
+
+    const firstUnlabeled = frames.findIndex(f => f.label === "Unlabeled" && !f.missing);
+    lb.idx = firstUnlabeled >= 0 ? firstUnlabeled : 0;
+
+    showLabelView();
+    lbRenderAll();
+  } catch (e) {
+    toast("Failed to load: " + e.message);
+  }
+}
+
+function showLabelView() {
+  document.getElementById("main-wrapper").style.display     = "none";
+  document.getElementById("view-label").classList.add("active");
+  document.getElementById("hdr-title").style.display        = "none";
+  document.getElementById("lb-back").style.display          = "inline-flex";
+  document.getElementById("lb-exp-info").style.display      = "block";
+  const isDone = lb.exp?.labeling_stage === "done";
+  document.getElementById("lb-booleans").style.display      = lb.readOnly ? "none" : "flex";
+  // Hide the Reset Pass button in done/review stage — destructive and not needed there
+  document.getElementById("lb-reset-btn").style.display     = (lb.readOnly || isDone) ? "none" : "inline-flex";
+  document.getElementById("lb-progress-header").style.display = "block";
+  document.getElementById("global-stats").style.display     = "none";
+
+  // Show/hide conflicts filter button
+  const stage = lb.exp?.labeling_stage;
+  const conflictBtn = document.getElementById("filter-conflicts");
+  if (conflictBtn) conflictBtn.style.display = stage === "correction" ? "" : "none";
+
+  // Auto-set filter for correction mode
+  if (stage === "correction") {
+    lb.filter = "conflicts";
+  }
+
+  updateExpInfoHeader();
+  updateStageBtns();
+}
+
+function closeLabelView() {
+  if (morphPollTimer) { clearInterval(morphPollTimer); morphPollTimer = null; }
+  document.getElementById("main-wrapper").style.display   = "";
+  document.getElementById("view-label").classList.remove("active");
+  document.getElementById("hdr-title").style.display      = "";
+  document.getElementById("lb-back").style.display        = "none";
+  document.getElementById("lb-exp-info").style.display    = "none";
+  document.getElementById("lb-booleans").style.display    = "none";
+  document.getElementById("lb-reset-btn").style.display   = "none";
+  document.getElementById("lb-agree-btn").style.display   = "none";
+  document.getElementById("lb-progress-header").style.display = "none";
+  document.getElementById("global-stats").style.display   = "";
+  loadDashboard();
+}
+
+document.getElementById("lb-back").addEventListener("click", () => {
+  if (document.getElementById("view-compare").classList.contains("active")) {
+    closeCompareView();
+  } else {
+    closeLabelView();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aggregated panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+function toggleAgg() {
+  lb.aggOpen = !lb.aggOpen;
+  const panel = document.getElementById("lb-agg-panel");
+  const btn   = document.getElementById("btn-agg-toggle");
+  panel.classList.toggle("open", lb.aggOpen);
+  btn.classList.toggle("active", lb.aggOpen);
+  if (lb.aggOpen) {
+    fetchBgComputeState();
+    fetchMorphStatus(); // load current status when panel opens
+    renderAggPanel();
+  }
+}
+
+// composite status cache: label → "none"|"computing"|"ready"|"stale"
+let morphStatus = {};
+let morphPollTimer = null;
+let bgComputeEnabled = false;
+
+async function fetchBgComputeState() {
+  try {
+    const s = await get("/api/settings/bg_compute");
+    bgComputeEnabled = s.enabled;
+    updateBgComputeBtn();
+  } catch {}
+}
+
+async function toggleBgCompute() {
+  try {
+    const s = await post("/api/settings/bg_compute");
+    bgComputeEnabled = s.enabled;
+    updateBgComputeBtn();
+    toast(bgComputeEnabled ? "Auto-Morph ON — background computation enabled" : "Auto-Morph OFF");
+    if (bgComputeEnabled) startMorphPoll();
+  } catch {}
+}
+
+function updateBgComputeBtn() {
+  const btn = document.getElementById("btn-bg-compute");
+  if (!btn) return;
+  btn.textContent = bgComputeEnabled ? "ON" : "OFF";
+  btn.classList.toggle("on", bgComputeEnabled);
+}
+
+async function fetchMorphStatus() {
+  try {
+    morphStatus = await get(`/api/composites/${lb.expId}/status`);
+    if (lb.aggOpen) renderAggPanel();
+    if (Object.values(morphStatus).every(s => s !== "computing")) {
+      clearInterval(morphPollTimer);
+      morphPollTimer = null;
+    }
+  } catch {}
+}
+
+function startMorphPoll() {
+  if (morphPollTimer) return;
+  morphPollTimer = setInterval(fetchMorphStatus, 2000);
+}
+
+async function triggerMorph(lbl, slug, event) {
+  event.stopPropagation();
+  morphStatus[lbl] = "computing";
+  renderAggPanel();
+  startMorphPoll();
+  try { await post(`/api/composites/${lb.expId}/${slug}`); } catch {}
+}
+
+function renderAggPanel() {
+  const target = document.getElementById("lb-agg-groups");
+  if (!target) return;
+  const curTs = lbCurrentFrame()?.timestep;
+
+  const groups = {};
+  LABELS.forEach(lbl => { groups[lbl] = []; });
+  lb.frames.forEach(f => { if (!f.missing) groups[f.label]?.push(f); });
+
+  target.innerHTML = LABELS.map(lbl => {
+    if (lbl === "Unlabeled") return "";
+    const frames = groups[lbl];
+    const isOpen = lb.openGroups.has(lbl);
+    const safeId = lbl.replace(/\s/g, "-");
+    const slug   = lbl.toLowerCase().replace(/\s/g, "-");
+    const status = morphStatus[lbl] ?? "none";
+
+    const morphBtnLabel = {
+      none:      "⊕ Morph",
+      computing: "⏳ …",
+      stale:     "⟳ Recompute",
+      ready:     "✓ Recompute",
+    }[status] ?? "⊕ Morph";
+
+    const morphBtn = frames.length > 0
+      ? `<button class="btn-morph ${status}"
+             onclick="triggerMorph('${lbl.replace(/'/g,"\\'")}','${slug}',event)"
+             ${status === "computing" ? "disabled" : ""}>${morphBtnLabel}</button>`
+      : "";
+
+    // Morph section: pinned at top when group is open
+    let morphSection = "";
+    if (isOpen) {
+      let morphContent = "";
+      if (status === "ready") {
+        morphContent = `<img class="lb-morph-img" src="/api/composites/${lb.expId}/${slug}?t=${Date.now()}" alt="morph" />
+          <div class="lb-morph-meta">Mean · ${frames.length} frame${frames.length !== 1 ? "s" : ""}</div>`;
+      } else if (status === "stale") {
+        morphContent = `<img class="lb-morph-img" src="/api/composites/${lb.expId}/${slug}?t=stale" alt="stale morph"
+                 onerror="this.style.display='none'" style="opacity:.45;width:100%" />
+          <div class="lb-morph-meta" style="color:var(--yellow)">Stale · ${frames.length} frames</div>`;
+      } else if (status === "computing") {
+        morphContent = `<div class="lb-morph-placeholder"><div class="spinner"></div><span>Computing…</span></div>
+          <div class="lb-morph-meta">${frames.length} frame${frames.length !== 1 ? "s" : ""}</div>`;
+      } else {
+        morphContent = `<div class="lb-morph-placeholder"><span>No morph yet</span></div>
+          <div class="lb-morph-meta">${frames.length} frame${frames.length !== 1 ? "s" : ""}</div>`;
+      }
+      morphSection = `<div class="lb-morph-section">${morphContent}${morphBtn}</div>`;
+    }
+
+    const thumbs = isOpen ? frames.map(f => `
+      <div class="lb-thumb ${f.timestep === curTs ? "current" : ""}" onclick="lbGoToTs(${f.timestep})">
+        <img src="/images/${lb.expId}/${f.timestep}" loading="lazy" alt="${f.timestep}" />
+        <span class="lb-thumb-ts">${f.timestep}</span>
+      </div>`).join("") : "";
+
+    return `<div class="lb-group" id="grp-${safeId}">
+      <div class="lb-group-header ${isOpen ? "open" : ""}" onclick="toggleGroup('${lbl.replace(/'/g,"\\'")}')">
+        <span class="lb-group-dot" style="background:${LABEL_COLOR[lbl]}"></span>
+        <span class="lb-group-name">${lbl}</span>
+        <span class="lb-group-count">${frames.length}</span>
+        <span class="lb-group-chevron">▶</span>
+      </div>
+      <div class="lb-group-body ${isOpen ? "open" : ""}">
+        ${morphSection}
+        <div class="lb-group-thumbs">${thumbs}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setFilter(f) {
+  lb.filter = f;
+  document.getElementById("filter-all").classList.toggle("active",       f === "all");
+  document.getElementById("filter-unlabeled").classList.toggle("active", f === "unlabeled");
+  const conflictBtn = document.getElementById("filter-conflicts");
+  if (conflictBtn) conflictBtn.classList.toggle("active", f === "conflicts");
+
+  const badge = document.getElementById("lb-filter-badge");
+  if (f === "unlabeled") {
+    const n = lb.frames.filter(fr => fr.label === "Unlabeled" && !fr.missing).length;
+    badge.textContent = `Showing ${n} unlabeled`;
+    badge.style.display = "block";
+  } else if (f === "conflicts") {
+    const n = lb.frames.filter(fr => fr.label_1 !== fr.label_2 && fr.label_final == null && !fr.missing).length;
+    badge.textContent = `Showing ${n} conflicts`;
+    badge.style.display = "block";
+  } else {
+    badge.style.display = "none";
+  }
+
+  renderSidebarList();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Header helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function updateExpInfoHeader() {
+  const e = lb.exp;
+  const stageLabel = {
+    round_1:    '<span style="color:var(--muted);font-size:11px">[Round 1]</span>',
+    round_2:    '<span style="color:var(--accent);font-size:11px">[Round 2]</span>',
+    correction: '<span style="color:var(--yellow);font-size:11px">[Correction]</span>',
+    done:       '<span style="color:var(--green);font-size:11px">[Done]</span>',
+  }[e.labeling_stage] ?? '';
+  document.getElementById("lb-exp-info").innerHTML =
+    `<span class="param">P&nbsp;${e.P}</span>&nbsp;
+     <span class="param">VX&nbsp;${e.VX}</span>&nbsp;
+     <span class="param">LS&nbsp;${e.LS}</span>&nbsp;
+     <span class="param">ST&nbsp;${e.ST}</span>` +
+    (lb.readOnly ? ' <span style="color:var(--muted);font-size:11px">[Review]</span>' : ` ${stageLabel}`);
+  updateBoolButtons();
+}
+
+function updateBoolButtons() {
+  const e = lb.exp;
+  ["yes","no","null"].forEach(v => {
+    document.getElementById(`btn-bf-${v}`).classList.remove("active");
+    document.getElementById(`btn-cf-${v}`).classList.remove("active");
+  });
+  const bfKey = e.bug_free === true ? "yes" : e.bug_free === false ? "no" : "null";
+  const cfKey = e.correctly_finished === true ? "yes" : e.correctly_finished === false ? "no" : "null";
+  document.getElementById(`btn-bf-${bfKey}`).classList.add("active");
+  document.getElementById(`btn-cf-${cfKey}`).classList.add("active");
+}
+
+function updateProgressHeader() {
+  const stage = lb.exp?.labeling_stage;
+  let html;
+  if (stage === "correction") {
+    const totalConflicts = lb.frames.filter(f => f.label_1 !== f.label_2 && !f.missing).length;
+    const resolved       = lb.frames.filter(f => f.label_1 !== f.label_2 && f.label_final != null && !f.missing).length;
+    const pct = totalConflicts > 0 ? Math.round(resolved / totalConflicts * 1000) / 10 : 0;
+    html = `<span>${resolved}/${totalConflicts}</span>&nbsp;conflicts&nbsp;resolved&nbsp;·&nbsp;<span>${pct}%</span>`;
+  } else {
+    const total     = lb.frames.filter(f => !f.missing).length;
+    const unlabeled = lb.frames.filter(f => f.label === "Unlabeled" && !f.missing).length;
+    const labeled   = total - unlabeled;
+    const pct       = total > 0 ? Math.round(labeled / total * 1000) / 10 : 0;
+    html = `<span>${labeled}/${total}</span>&nbsp;labeled&nbsp;·&nbsp;<span>${pct}%</span>` +
+           (unlabeled > 0 ? `&nbsp;·&nbsp;${unlabeled} remaining` : "");
+  }
+  document.getElementById("lb-progress-header").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render
+// ─────────────────────────────────────────────────────────────────────────────
+
+function lbRenderAll() {
+  lbRenderImage();
+  renderSidebarList();
+  lbRenderTimeline();
+  lbRenderLegend();
+  updateProgressHeader();
+  updateStageBtns();
+  if (lb.aggOpen) renderAggPanel();
+}
+
+function lbCurrentFrame() { return lb.frames[lb.idx]; }
+
+function lbRenderImage() {
+  const f = lbCurrentFrame();
+  if (!f) return;
+  const img           = document.getElementById("lb-img");
+  const noImg         = document.getElementById("lb-no-image");
+  const badge         = document.getElementById("lb-timestep-badge");
+  const missing       = document.getElementById("lb-missing-badge");
+  const conflictBadge = document.getElementById("lb-conflict-badge");
+
+  // Position in filtered set
+  const filtered = filteredFrames();
+  const filtIdx  = filtered.findIndex(fr => fr.timestep === f.timestep);
+  const posStr   = lb.filter !== "all" && filtIdx >= 0
+    ? ` (${filtIdx + 1}/${filtered.length})`
+    : ` (${lb.idx + 1}/${lb.frames.length})`;
+
+  badge.textContent = `ts: ${f.timestep}${posStr}`;
+  missing.style.display = f.missing ? "block" : "none";
+
+  // Conflict badge
+  if (conflictBadge) {
+    if (f.label_1 && f.label_2 && f.label_1 !== f.label_2 && !f.label_final) {
+      conflictBadge.innerHTML = `<span style="color:var(--yellow)">⚠ R1: ${f.label_1}</span> <span style="color:var(--muted)">vs</span> <span style="color:var(--accent)">R2: ${f.label_2}</span>`;
+      conflictBadge.style.display = "block";
+    } else {
+      conflictBadge.style.display = "none";
+    }
+  }
+
+  if (f.missing) {
+    img.style.display   = "none";
+    noImg.style.display = "block";
+    noImg.textContent   = `Frame ts:${f.timestep} is missing on disk`;
+  } else {
+    noImg.style.display = "none";
+    img.style.display   = "block";
+    img.src = `/images/${lb.expId}/${f.timestep}`;
+  }
+}
+
+// ── Timesteps sidebar ─────────────────────────────────────────────────────────
+
+function renderSidebarList() {
+  const list   = document.getElementById("lb-sidebar-list");
+  const frames = filteredFrames();
+
+  list.innerHTML = frames.map(f => {
+    const isCur = f.timestep === lbCurrentFrame()?.timestep;
+    const isConflict = f.label_1 && f.label_2 && f.label_1 !== f.label_2 && !f.label_final;
+    const extraDots = isConflict
+      ? `<div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label_1] ?? 'var(--muted)'};width:6px;height:6px"></div>` +
+        `<div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label_2] ?? 'var(--muted)'};width:6px;height:6px"></div>`
+      : '';
+    return `<div class="lb-ts-item ${isCur ? "current" : ""}" onclick="lbGoToTs(${f.timestep})">
+      <div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label] ?? 'var(--muted)'}"></div>
+      ${extraDots}
+      <span class="lb-ts-num">${f.timestep}</span>
+      ${lb.filter === "all" ? `<span class="lb-ts-lbl">${f.label === "Unlabeled" ? "" : f.label.split(" ")[0]}</span>` : ""}
+    </div>`;
+  }).join("");
+
+  const cur = list.querySelector(".current");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+function toggleGroup(lbl) {
+  if (lb.openGroups.has(lbl)) lb.openGroups.delete(lbl);
+  else lb.openGroups.add(lbl);
+  if (lb.aggOpen) renderAggPanel();
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────────
+
+function lbRenderTimeline() {
+  const tl  = document.getElementById("lb-timeline");
+  const cur = lbCurrentFrame();
+  tl.innerHTML = lb.frames.map((f, i) =>
+    `<div class="lb-tl-seg ${f.timestep === cur?.timestep ? "current" : ""}"
+          style="background:${LABEL_COLOR[f.label] ?? 'var(--muted)'}"
+          title="ts:${f.timestep} — ${f.label}"
+          onclick="lbGoTo(${i})"></div>`
+  ).join("");
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+function lbRenderLegend() {
+  const cur = lbCurrentFrame();
+  // Per-label frame counts
+  const counts = {};
+  LABELS.forEach(lbl => { counts[lbl] = 0; });
+  lb.frames.forEach(f => { if (!f.missing && counts[f.label] !== undefined) counts[f.label]++; });
+
+  document.getElementById("lb-legend").innerHTML =
+    LABELS.map((lbl, i) => {
+      const n = counts[lbl];
+      const countStr = n > 0 ? `<span style="font-size:10px;color:var(--muted);margin-left:3px">(${n})</span>` : "";
+      return `<div class="lb-legend-item ${cur && cur.label === lbl ? "current-label" : ""}">
+        <span class="lb-legend-key">${i + 1}</span>
+        <span class="lb-legend-dot" style="background:${LABEL_COLOR[lbl]}"></span>
+        ${lbl}${countStr}
+      </div>`;
+    }).join("") +
+    `<div id="lb-legend-spacer"></div>
+     <div id="lb-nav-hint">
+       <span class="kb">←</span><span class="kb">→</span>&nbsp;navigate&nbsp;
+       <span class="kb">n</span>&nbsp;next exp&nbsp;
+       ${lb.readOnly ? "" : '<span class="kb">Ctrl+Z</span>&nbsp;undo&nbsp;<span class="kb">b</span>&nbsp;bug&nbsp;<span class="kb">f</span>&nbsp;finished'}
+     </div>
+     <button class="btn xs ${lb.aggOpen ? "active" : ""}" id="btn-agg-toggle" onclick="toggleAgg()">By Label</button>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Navigation
+// ─────────────────────────────────────────────────────────────────────────────
+
+function lbGoTo(idx) {
+  if (idx < 0 || idx >= lb.frames.length) return;
+  lb.idx = idx;
+  lbRenderImage();
+  renderSidebarList();
+  lbRenderTimeline();
+  lbRenderLegend();
+}
+
+// Navigate by +1/-1, respecting active filter
+function lbNav(delta) {
+  const filtered = filteredFrames();
+  if (!filtered.length) return;
+  const curTs  = lbCurrentFrame()?.timestep;
+  const curFi  = filtered.findIndex(f => f.timestep === curTs);
+  const nextFi = curFi < 0
+    ? (delta > 0 ? 0 : filtered.length - 1)
+    : Math.max(0, Math.min(filtered.length - 1, curFi + delta));
+  const nextTs = filtered[nextFi].timestep;
+  const nextIdx = lb.frames.findIndex(f => f.timestep === nextTs);
+  if (nextIdx >= 0) lbGoTo(nextIdx);
+}
+
+// Jump directly to a timestep
+function lbGoToTs(ts) {
+  const idx = lb.frames.findIndex(f => f.timestep === ts);
+  if (idx >= 0) lbGoTo(idx);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Labeling
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function lbSetLabel(label) {
+  if (lb.readOnly) return;
+  const f = lbCurrentFrame();
+  if (!f) return;
+  try {
+    const updated = await patch(`/api/frames/${lb.expId}/${f.timestep}`, { label });
+    // Use timestep (captured before await) to find the correct index — lb.idx may have
+    // changed if the user navigated while the request was in flight.
+    const savedIdx = lb.frames.findIndex(fr => fr.timestep === f.timestep);
+    if (savedIdx >= 0) lb.frames[savedIdx] = updated;
+
+    // Check if all conflicts resolved in correction mode
+    const stage = lb.exp?.labeling_stage;
+    if (stage === "correction" && updated.label_final != null) {
+      const remaining = lb.frames.filter(fr => fr.label_1 !== fr.label_2 && fr.label_final == null && !fr.missing).length;
+      if (remaining === 0) {
+        // All conflicts resolved — re-fetch experiment to get updated stage
+        try {
+          lb.exp = await get(`/api/experiments/${lb.expId}`);
+          if (lb.exp.labeling_stage === "done") {
+            lb.filter = "all";
+            const conflictBtn = document.getElementById("filter-conflicts");
+            if (conflictBtn) conflictBtn.style.display = "none";
+            updateExpInfoHeader();
+            // Auto-assign flags at final completion
+            autoAssignFlags();
+            showExpDoneModal(
+              "All Conflicts Resolved!",
+              "Every conflict has been resolved. The experiment is now finalised."
+            );
+          }
+        } catch {}
+      }
+    }
+
+    // In review (done) stage, keep flags in sync after every label change
+    if (stage === "done") autoAssignFlags();
+
+    // Check if round 1 or round 2 just completed
+    if (!lb.roundCompleteShown && !lb.readOnly) {
+      const stageNow = lb.exp?.labeling_stage;
+      if (stageNow === 'round_1' || stageNow === 'round_2') {
+        const nonMissing = lb.frames.filter(fr => !fr.missing);
+        const unlabeled  = nonMissing.filter(fr => fr.label === 'Unlabeled').length;
+        if (unlabeled === 0 && nonMissing.length > 0) {
+          lb.roundCompleteShown = true;
+          showRoundCompleteOptions(stageNow);
+        }
+      }
+    }
+
+    // Auto-advance: next unlabeled/conflict in current filter set
+    const currentFilter = lb.filter;
+    let advance = null;
+    if (currentFilter === "conflicts") {
+      const nextConflicts = lb.frames.filter(fr => fr.timestep > f.timestep && fr.label_1 !== fr.label_2 && fr.label_final == null && !fr.missing);
+      advance = nextConflicts.length > 0 ? nextConflicts[0] : null;
+    } else {
+      const searchSet = filteredFrames().filter(fr => fr.timestep > f.timestep && fr.label === "Unlabeled" && !fr.missing);
+      advance = searchSet.length > 0 ? searchSet[0] : null;
+    }
+
+    lbRenderTimeline();
+    lbRenderLegend();
+    renderSidebarList();
+    if (lb.aggOpen) renderAggPanel();
+    updateProgressHeader();
+    updateStageBtns();
+
+    if (advance) {
+      lbGoToTs(advance.timestep);
+    } else {
+      lbRenderImage();
+    }
+  } catch (e) {
+    toast("Save failed: " + e.message);
+  }
+}
+
+async function lbUndo() {
+  if (lb.readOnly) return;
+  try {
+    const result = await post("/api/undo");
+    if (!result.reverted_to) { toast("Nothing to undo"); return; }
+    const i = lb.frames.findIndex(f => f.timestep === result.timestep);
+    if (i >= 0) lb.frames[i] = { ...lb.frames[i], label: result.reverted_to };
+    lbGoTo(i >= 0 ? i : lb.idx);
+    if (lb.aggOpen) renderAggPanel();
+    updateProgressHeader();
+    toast(`Undone: ts ${result.timestep} → ${result.reverted_to}`);
+  } catch (e) {
+    toast("Undo failed: " + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-pass workflow
+// ─────────────────────────────────────────────────────────────────────────────
+
+function updateStageBtns() {
+  const stage = lb.exp?.labeling_stage;
+  const agBtn  = document.getElementById("lb-agree-btn");
+  const rstBtn = document.getElementById("lb-reset-btn");
+  if (!agBtn || !rstBtn) return;
+  const nonMissing = lb.frames.filter(f => !f.missing);
+  const unlabeled  = nonMissing.filter(f => f.label === "Unlabeled").length;
+  const hasFrames  = nonMissing.length > 0;
+
+  // "Check Agreement" convenience button when round_2 fully labeled
+  agBtn.style.display = (stage === "round_2" && unlabeled === 0 && hasFrames && !lb.readOnly) ? "inline-flex" : "none";
+
+  // Label the reset button with which pass it's resetting
+  if (!lb.readOnly) {
+    if (stage === "round_1") rstBtn.textContent = "Reset R1";
+    else if (stage === "round_2") rstBtn.textContent = "Reset R2";
+    else rstBtn.textContent = "Reset Pass";
+  }
+}
+
+// Auto-assign bug_free and correctly_finished based on current lb.frames.
+// Called when a run finishes (round or final done stage).
+async function autoAssignFlags() {
+  const nonMissing = lb.frames.filter(f => !f.missing);
+  const hasBug     = nonMissing.some(f => f.label === 'Screenshot Bug');
+  const allLabeled = nonMissing.length > 0 && nonMissing.every(f => f.label !== 'Unlabeled');
+  try {
+    const updated = await patch(`/api/experiments/${lb.expId}`, {
+      bug_free: !hasBug,
+      correctly_finished: allLabeled,
+    });
+    lb.exp = updated;
+    updateBoolButtons();
+  } catch {}
+}
+
+async function showRoundCompleteOptions(stage) {
+  // Auto-set bug_free / correctly_finished for this completed run.
+  await autoAssignFlags();
+
+  // Determine pass completion from lb.frames (authoritative — updated on every save).
+  // label_1 / label_2 are included in every frame dict returned by the server.
+  const nonMissing = lb.frames.filter(f => !f.missing);
+  const pass1Done = nonMissing.length > 0 &&
+    nonMissing.every(f => f.label_1 !== null && f.label_1 !== 'Unlabeled');
+  const pass2Done = nonMissing.length > 0 &&
+    nonMissing.every(f => f.label_2 !== null && f.label_2 !== 'Unlabeled');
+  const bothDone  = pass1Done && pass2Done;
+
+  // Refresh dashboard list in background
+  try {
+    const fresh = await get("/api/experiments");
+    allExperiments = fresh;
+  } catch {}
+
+  let title, msg, actionLabel, actionFn;
+  if (bothDone) {
+    const roundNum = stage === 'round_1' ? 1 : 2;
+    title      = `Round ${roundNum} Complete!`;
+    msg        = 'Both rounds are fully labeled. You can now proceed to voting.';
+    actionLabel = 'Go to Voting';
+    actionFn   = () => openVoting(lb.expId);
+  } else if (stage === 'round_1') {
+    title      = 'Round 1 Complete!';
+    msg        = 'All frames are labeled. Switch to Round 2 to continue.';
+    actionLabel = 'Switch to Round 2';
+    actionFn   = () => openRound(lb.expId, 2);
+  } else {
+    // Round 2 is done — always advance to voting.
+    // check_agreement will auto-fill any missing round-1 labels so data stays clean.
+    title      = 'Round 2 Complete!';
+    msg        = 'All frames labeled. Proceed to voting to compare rounds.';
+    actionLabel = 'Go to Voting';
+    actionFn   = () => openVoting(lb.expId);
+  }
+
+  document.getElementById('round-done-title').textContent = title;
+  document.getElementById('round-done-msg').textContent   = msg;
+  const actionBtn = document.getElementById('round-done-action');
+  actionBtn.textContent = actionLabel;
+  actionBtn.onclick = () => {
+    document.getElementById('modal-round-done').style.display = 'none';
+    actionFn();
+  };
+  document.getElementById('modal-round-done').style.display = 'flex';
+}
+
+async function checkAgreement() {
+  try {
+    const r = await post(`/api/experiments/${lb.expId}/check_agreement`);
+    lb.exp = r;
+    const frames = await get(`/api/experiments/${lb.expId}/frames`);
+    lb.frames = frames;
+    if (r.stage === "done") {
+      lb.filter = "all";
+      lb.idx = 0;
+      const conflictBtn = document.getElementById("filter-conflicts");
+      if (conflictBtn) conflictBtn.style.display = "none";
+      lbRenderAll();
+      updateExpInfoHeader();
+      // Auto-assign flags at final completion
+      autoAssignFlags();
+      showExpDoneModal(
+        "Perfect Agreement!",
+        "All labels match between Round 1 and Round 2. The experiment is now finalised."
+      );
+    } else {
+      lb.filter = "conflicts";
+      lb.idx = 0;
+      const conflictBtn = document.getElementById("filter-conflicts");
+      if (conflictBtn) conflictBtn.style.display = "";
+      // Jump to first conflict
+      const fi = lb.frames.findIndex(f => f.label_1 !== f.label_2 && f.label_final == null);
+      if (fi >= 0) lb.idx = fi;
+      lbRenderAll();
+      updateExpInfoHeader();
+      toast(`${r.conflict_count} conflicts found — resolve them to finish`);
+    }
+  } catch(e) { toast("Failed: " + e.message); }
+}
+
+async function lbNextExperiment() {
+  const stage   = lb.exp?.labeling_stage ?? 'round_1';
+  const passNum = stage === 'round_2' ? 2 : 1;
+  const pctKey  = passNum === 2 ? 'pass2_pct' : 'pass1_pct';
+  const curId   = lb.expId;
+
+  // Reload dashboard data silently so we have fresh pct values
+  try {
+    const fresh = await get("/api/experiments");
+    allExperiments = fresh;
+  } catch {}
+
+  const curIdx = allExperiments.findIndex(e => e.id === curId);
+  const pool   = [
+    ...allExperiments.slice(curIdx + 1),
+    ...allExperiments.slice(0, curIdx),
+  ];
+  const next = pool.find(e => (e.progress[pctKey] ?? 0) < 100 && e.progress.total > 0);
+  if (!next) {
+    toast(`No more experiments to label in Round ${passNum}!`);
+    return;
+  }
+  await openRound(next.id, passNum);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Comparison mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+let cmpExpId    = null;
+let cmpPollTimer = null;
+let cmpStatus   = {};
+let cmpCounts   = { 'Convection': 0, 'Keyhole': 0 };
+
+async function openComparison(expId) {
+  cmpExpId   = expId;
+  cmpStatus  = {};
+  cmpCounts  = { 'Convection': 0, 'Keyhole': 0 };
+  if (cmpPollTimer) { clearInterval(cmpPollTimer); cmpPollTimer = null; }
+  const expData = allExperiments.find(e => e.id === expId);
+  try {
+    const [frames, status] = await Promise.all([
+      get(`/api/experiments/${expId}/frames`),
+      get(`/api/composites/${expId}/status`),
+    ]);
+    frames.filter(f => !f.missing).forEach(f => {
+      if (f.label in cmpCounts) cmpCounts[f.label]++;
+    });
+    cmpStatus = status;
+    showCompareView(expData);
+    renderCmpPanels();
+    if (['Convection', 'Keyhole'].some(l => cmpStatus[l] === 'computing'))
+      cmpPollTimer = setInterval(fetchCmpStatus, 2000);
+  } catch(e) { toast("Failed to load: " + e.message); }
+}
+
+function showCompareView(exp) {
+  document.getElementById("main-wrapper").style.display      = "none";
+  document.getElementById("view-compare").classList.add("active");
+  document.getElementById("hdr-title").style.display         = "none";
+  document.getElementById("lb-back").style.display           = "inline-flex";
+  document.getElementById("lb-exp-info").style.display       = "block";
+  document.getElementById("lb-booleans").style.display       = "none";
+  document.getElementById("lb-reset-btn").style.display      = "none";
+  document.getElementById("lb-agree-btn").style.display      = "none";
+  document.getElementById("lb-progress-header").style.display = "none";
+  document.getElementById("global-stats").style.display      = "none";
+  if (exp) {
+    document.getElementById("lb-exp-info").innerHTML =
+      `<span class="param">P&nbsp;${exp.P}</span>&nbsp;
+       <span class="param">VX&nbsp;${exp.VX}</span>&nbsp;
+       <span class="param">LS&nbsp;${exp.LS}</span>&nbsp;
+       <span class="param">ST&nbsp;${exp.ST}</span>&nbsp;
+       <span style="color:var(--accent);font-size:11px">[Compare]</span>`;
+  }
+}
+
+function closeCompareView() {
+  if (cmpPollTimer) { clearInterval(cmpPollTimer); cmpPollTimer = null; }
+  document.getElementById("main-wrapper").style.display   = "";
+  document.getElementById("view-compare").classList.remove("active");
+  document.getElementById("hdr-title").style.display      = "";
+  document.getElementById("lb-back").style.display        = "none";
+  document.getElementById("lb-exp-info").style.display    = "none";
+  document.getElementById("global-stats").style.display   = "";
+  loadDashboard();
+}
+
+async function fetchCmpStatus() {
+  try {
+    const status = await get(`/api/composites/${cmpExpId}/status`);
+    cmpStatus = status;
+    renderCmpPanels();
+    if (!['Convection', 'Keyhole'].some(l => status[l] === 'computing')) {
+      clearInterval(cmpPollTimer); cmpPollTimer = null;
+    }
+  } catch {}
+}
+
+function renderCmpPanels() {
+  _renderCmpPanel('Convection', 'convection', 'cmp-conv');
+  _renderCmpPanel('Keyhole',    'keyhole',    'cmp-key');
+}
+
+function _renderCmpPanel(label, slug, prefix) {
+  const status = cmpStatus[label] ?? 'none';
+  const count  = cmpCounts[label] ?? 0;
+  const box  = document.getElementById(`${prefix}-box`);
+  const meta = document.getElementById(`${prefix}-meta`);
+  const btn  = document.getElementById(`btn-${prefix}`);
+  if (!box || !meta || !btn) return;
+
+  if (status === 'ready') {
+    box.innerHTML = `<img src="/api/composites/${cmpExpId}/${slug}?t=${Date.now()}" alt="${label}" />`;
+    meta.innerHTML = `<span style="color:var(--green)">✓ Ready</span> · ${count} frame${count !== 1 ? 's' : ''}`;
+    btn.textContent = '✓ Recompute'; btn.disabled = false;
+  } else if (status === 'stale') {
+    box.innerHTML = `<img src="/api/composites/${cmpExpId}/${slug}?t=stale" alt="${label}" style="opacity:.4;width:100%;height:100%;object-fit:contain" onerror="this.style.display='none'" />`;
+    meta.innerHTML = `<span style="color:var(--yellow)">⚠ Stale</span> · ${count} frame${count !== 1 ? 's' : ''}`;
+    btn.textContent = '⟳ Recompute'; btn.disabled = false;
+  } else if (status === 'computing') {
+    box.innerHTML = `<div class="lb-morph-placeholder"><div class="spinner"></div><span>Computing…</span></div>`;
+    meta.innerHTML = `<span style="color:var(--accent)">Computing…</span>`;
+    btn.textContent = '⏳ …'; btn.disabled = true;
+  } else {
+    box.innerHTML = `<div class="lb-morph-placeholder">
+      <span style="font-size:13px">No morph yet</span>
+      <span style="font-size:11px">${count} frame${count !== 1 ? 's' : ''} labeled</span>
+    </div>`;
+    meta.innerHTML = `${count} frame${count !== 1 ? 's' : ''} labeled as ${label}`;
+    btn.textContent = '⊕ Compute Morph'; btn.disabled = count === 0;
+  }
+  btn.onclick = () => triggerCmpCompute(label, slug);
+}
+
+async function triggerCmpCompute(label, slug) {
+  cmpStatus[label] = 'computing';
+  renderCmpPanels();
+  if (!cmpPollTimer) cmpPollTimer = setInterval(fetchCmpStatus, 2000);
+  try { await post(`/api/composites/${cmpExpId}/${slug}`); } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Total reset + import modals
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showTotalResetModal() {
+  const inp = document.getElementById("total-reset-confirm");
+  inp.value = "";
+  document.getElementById("btn-total-reset-confirm").disabled = true;
+  const m = document.getElementById("modal-total-reset");
+  m.style.display = "flex";
+  inp.focus();
+}
+
+async function executeTotalReset() {
+  document.getElementById("modal-total-reset").style.display = "none";
+  try {
+    const r = await post("/api/reset_all");
+    toast(`Total reset: ${r.reset} frames cleared`);
+    loadDashboard();
+  } catch(e) { toast("Reset failed: " + e.message); }
+}
+
+function showExportDialog() {
+  document.getElementById("modal-export").style.display = "flex";
+}
+
+function executeExport() {
+  const which = document.querySelector('input[name="export-which"]:checked')?.value ?? "all";
+  document.getElementById("modal-export").style.display = "none";
+  // Trigger file download by navigating to the endpoint
+  const a = document.createElement("a");
+  a.href = `/api/export/csv?which=${which}`;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function showImportDialog() {
+  document.getElementById("import-file-input").value = "";
+  document.getElementById("modal-import").style.display = "flex";
+}
+
+async function executeImport() {
+  const fileInput = document.getElementById("import-file-input");
+  const passVal   = document.querySelector('input[name="import-pass"]:checked')?.value ?? "1";
+  if (!fileInput.files.length) { toast("Select a CSV file first"); return; }
+
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+  fd.append("pass", passVal);
+  document.getElementById("modal-import").style.display = "none";
+
+  try {
+    const r = await fetch("/api/import", { method: "POST", body: fd });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const passName = passVal === "voting" ? "Voting" : `Round ${passVal}`;
+    toast(`Imported ${j.updated} labels (${j.skipped} skipped) into ${passName}`);
+    loadDashboard();
+  } catch(e) { toast("Import failed: " + e.message); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bool toggles
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function setBool(field, value) {
+  if (lb.readOnly) return;
+  try {
+    const updated = await patch(`/api/experiments/${lb.expId}`, { [field]: value });
+    lb.exp = updated;
+    updateBoolButtons();
+  } catch (e) {
+    toast("Failed to update: " + e.message);
+  }
+}
+
+// Cycle: null → true → false → null
+function cycleBool(field) {
+  if (lb.readOnly || !lb.exp) return;
+  const cur = lb.exp[field];
+  const next = cur === null ? true : cur === true ? false : null;
+  setBool(field, next);
+}
+
+async function resetCurrentExperiment() {
+  if (lb.readOnly || !lb.expId) return;
+  const stage   = lb.exp?.labeling_stage ?? 'round_1';
+  const passNum = stage === 'round_2' ? 2 : 1;
+  const passLabel = stage === 'round_2' ? 'Round 2' : 'Round 1';
+  if (!confirm(`Reset all ${passLabel} labels to Unlabeled? This cannot be undone.`)) return;
+  try {
+    const r = await post(`/api/experiments/${lb.expId}/reset/${passNum}`);
+    const [exp, frames] = await Promise.all([
+      get(`/api/experiments/${lb.expId}`),
+      get(`/api/experiments/${lb.expId}/frames`),
+    ]);
+    lb.exp    = exp;
+    lb.frames = frames;
+    lb.idx    = 0;
+    lbRenderAll();
+    toast(`Reset ${r.reset} ${passLabel} frames to Unlabeled`);
+  } catch (e) { toast("Reset failed: " + e.message); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyboard
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.addEventListener("keydown", e => {
+  if (!document.getElementById("view-label").classList.contains("active")) return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+  if (e.key === "ArrowRight") { e.preventDefault(); lbNav(+1); }
+  else if (e.key === "ArrowLeft")  { e.preventDefault(); lbNav(-1); }
+  else if (e.key === "n") { e.preventDefault(); lbNextExperiment(); }
+  else if (e.key === "z" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); lbUndo(); }
+  else if (!lb.readOnly) {
+    const d = parseInt(e.key);
+    if (d >= 1 && d <= 7) { e.preventDefault(); lbSetLabel(LABELS[d - 1]); }
+    else if (e.key === "b") { e.preventDefault(); cycleBool("bug_free"); }
+    else if (e.key === "f") { e.preventDefault(); cycleBool("correctly_finished"); }
+  }
+});
+
+// Close modals on backdrop click or Escape
+["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done"].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener("click", e => { if (e.target === el) el.style.display = "none"; });
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    ["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done"]
+      .forEach(id => { document.getElementById(id).style.display = "none"; });
+  }
+}, true);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────────────────────
+
+loadDashboard();
+</script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Explainers — Melt Pool Frame Labeler</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2e3147;
+      --accent: #7c6af7;
+      --accent2: #4fc3f7;
+      --text: #e2e4f0;
+      --muted: #8b90a8;
+      --green: #56d364;
+      --yellow: #e3b341;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 3rem 1rem;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 1rem;
+      margin-bottom: 3rem;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+
+    .card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 3rem;
+    }
+
+    .card {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem 1.4rem;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .card:hover {
+      border-color: var(--accent);
+      background: #20233a;
+    }
+
+    .card-icon {
+      font-size: 1.6rem;
+      flex-shrink: 0;
+      width: 2.5rem;
+      text-align: center;
+    }
+
+    .card-body { flex-grow: 1; }
+
+    .card-title {
+      font-weight: 600;
+      color: var(--accent2);
+      margin-bottom: 0.15rem;
+    }
+
+    .card-desc {
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+
+    .card-arrow {
+      color: var(--muted);
+      font-size: 1.1rem;
+      flex-shrink: 0;
+    }
+
+    .card:hover .card-arrow {
+      color: var(--accent);
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.1em 0.55em;
+      border-radius: 4px;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+
+    .badge-new { background: #1a3a2a; color: var(--green); }
+    .badge-wip { background: #3a3010; color: var(--yellow); }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <h1>Explainers</h1>
+  <p class="subtitle">Plain-language guides to the tools and concepts used in the Melt Pool Frame Labeler.</p>
+
+  <!-- Tools & Libraries -->
+  <div class="section-label">Tools &amp; Libraries</div>
+  <div class="card-list">
+
+    <a class="card" href="sphinx_and_napoleon_explainer.html">
+      <div class="card-icon">📖</div>
+      <div class="card-body">
+        <div class="card-title">Sphinx &amp; Napoleon <span class="badge badge-new">new</span></div>
+        <div class="card-desc">How this project auto-generates its API docs from Google-style docstrings — with zero duplication.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </a>
+
+  </div>
+
+  <!-- Architecture — placeholder cards for future explainers -->
+  <div class="section-label">Architecture</div>
+  <div class="card-list">
+
+    <div class="card" style="opacity: 0.45; cursor: default;">
+      <div class="card-icon">🗄️</div>
+      <div class="card-body">
+        <div class="card-title">LabelDB &amp; SQLite <span class="badge badge-wip">coming soon</span></div>
+        <div class="card-desc">How the database layer works: schema, upserts, the undo stack, and progress queries.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+
+    <div class="card" style="opacity: 0.45; cursor: default;">
+      <div class="card-icon">📂</div>
+      <div class="card-body">
+        <div class="card-title">Scanner &amp; Diff Crawl <span class="badge badge-wip">coming soon</span></div>
+        <div class="card-desc">How the filesystem crawler finds simulation folders, parses parameters, and handles re-scans safely.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+
+    <div class="card" style="opacity: 0.45; cursor: default;">
+      <div class="card-icon">🔌</div>
+      <div class="card-body">
+        <div class="card-title">Flask REST API <span class="badge badge-wip">coming soon</span></div>
+        <div class="card-desc">The six endpoints that connect the Python backend to the browser frontend.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+
+    <div class="card" style="opacity: 0.45; cursor: default;">
+      <div class="card-icon">🤖</div>
+      <div class="card-body">
+        <div class="card-title">Suggester Layer <span class="badge badge-wip">coming soon</span></div>
+        <div class="card-desc">The pluggable suggestion system: how DummySuggester works and how to add an ML-based one.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+
+  </div>
+
+  <!-- Output & Aggregation -->
+  <div class="section-label">Output &amp; Aggregation</div>
+  <div class="card-list">
+
+    <div class="card" style="opacity: 0.45; cursor: default;">
+      <div class="card-icon">🗳️</div>
+      <div class="card-body">
+        <div class="card-title">Majority-Vote Aggregator <span class="badge badge-wip">coming soon</span></div>
+        <div class="card-desc">How to combine labeler.db files from multiple students into a single consensus dataset.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+
+  </div>
+
+  <footer>
+    Melt Pool Frame Labeler — internal documentation for students and contributors.
+  </footer>
+
+</div>
+</body>
+</html>

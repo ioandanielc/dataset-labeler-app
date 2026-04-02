@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sphinx & Napoleon — Explainer</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2e3147;
+      --accent: #7c6af7;
+      --accent2: #4fc3f7;
+      --text: #e2e4f0;
+      --muted: #8b90a8;
+      --code-bg: #12141e;
+      --green: #56d364;
+      --yellow: #e3b341;
+      --red: #f85149;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-bottom: 2rem;
+      color: var(--accent2);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--accent2);
+      margin: 2.5rem 0 0.8rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 1.5rem 0 0.4rem;
+    }
+
+    p { margin-bottom: 1rem; }
+
+    code {
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 0.85em;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1em 0.4em;
+      color: var(--accent2);
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      margin: 0.8rem 0 1.5rem;
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+
+    .comment  { color: #5c6370; font-style: italic; }
+    .keyword  { color: #c678dd; }
+    .string   { color: #98c379; }
+    .docstr   { color: #e5c07b; }
+    .funcname { color: #61afef; }
+    .typename { color: #e06c75; }
+    .number   { color: #d19a66; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin: 1rem 0;
+    }
+
+    .card-title {
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    .chain {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 1rem 0 1.5rem;
+    }
+
+    .chain-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .chain-left {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 2.5rem;
+      flex-shrink: 0;
+    }
+
+    .chain-dot {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .chain-line {
+      width: 2px;
+      flex-grow: 1;
+      min-height: 1.5rem;
+      background: var(--border);
+    }
+
+    .chain-content {
+      padding: 0.1rem 0 1.5rem;
+    }
+
+    .chain-content strong {
+      color: var(--accent2);
+    }
+
+    .chain-content p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0.2rem 0 0;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.15em 0.6em;
+      border-radius: 4px;
+      margin-right: 0.3rem;
+    }
+
+    .badge-purple { background: #3d2f7a; color: var(--accent); }
+    .badge-blue   { background: #1a3a4a; color: var(--accent2); }
+    .badge-green  { background: #1a3a2a; color: var(--green); }
+    .badge-yellow { background: #3a3010; color: var(--yellow); }
+
+    .cmd-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.9rem;
+    }
+
+    .cmd-box .prompt { color: var(--muted); }
+    .cmd-box .cmd    { color: var(--green); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      background: var(--surface);
+      color: var(--accent2);
+      border-bottom: 2px solid var(--border);
+    }
+
+    td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    td:first-child { color: var(--accent); font-family: monospace; font-size: 0.85rem; }
+
+    .callout {
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--yellow);
+      background: #1e1c10;
+      border-radius: 6px;
+      padding: 0.9rem 1.2rem;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+      color: var(--yellow);
+    }
+
+    .callout-green {
+      border-left-color: var(--green);
+      background: #0f1e14;
+      color: var(--green);
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <a class="back-link" href="index.html">← Back to Explainers</a>
+
+  <h1>Sphinx &amp; Napoleon</h1>
+  <p class="subtitle">How this project auto-generates its documentation from source code — with zero duplication.</p>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>The Problem This Solves</h2>
+
+  <p>
+    Without a doc tool, you face a choice: write a manual index in each file
+    (duplicating what the functions already say), or have no navigable docs at all.
+    Both options are bad.
+  </p>
+
+  <p>
+    <strong>Sphinx</strong> solves this by reading your Python source code directly
+    and generating a full, browsable HTML website from it — automatically.
+    You only write your docstrings once, in the code where they belong.
+    The docs are always in sync with the code because they <em>are</em> the code.
+  </p>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>The Two Tools</h2>
+
+  <div class="card">
+    <div class="card-title">Sphinx</div>
+    The documentation generator. It reads <code>.rst</code> config files,
+    imports your Python modules, extracts all docstrings, and renders HTML pages.
+    Think of it as a compiler — source code in, website out.
+  </div>
+
+  <div class="card">
+    <div class="card-title">Napoleon (sphinx.ext.napoleon)</div>
+    A Sphinx <em>extension</em> (a plugin). Plain Sphinx only understands its own
+    markup language (reStructuredText). Napoleon teaches Sphinx to also understand
+    <strong>Google-style</strong> and NumPy-style docstrings — which are far more
+    readable as plain text in your editor.
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>How They Connect — The Chain</h2>
+
+  <div class="chain">
+    <div class="chain-step">
+      <div class="chain-left">
+        <div class="chain-dot">1</div>
+        <div class="chain-line"></div>
+      </div>
+      <div class="chain-content">
+        <strong>You write Google-style docstrings</strong>
+        <p>Inside your <code>.py</code> files, under every function and class.</p>
+      </div>
+    </div>
+    <div class="chain-step">
+      <div class="chain-left">
+        <div class="chain-dot">2</div>
+        <div class="chain-line"></div>
+      </div>
+      <div class="chain-content">
+        <strong>docs/api/*.rst files point at your modules</strong>
+        <p>A single <code>.. automodule:: labeler.db</code> directive is all that's needed per file.</p>
+      </div>
+    </div>
+    <div class="chain-step">
+      <div class="chain-left">
+        <div class="chain-dot">3</div>
+        <div class="chain-line"></div>
+      </div>
+      <div class="chain-content">
+        <strong>sphinx.ext.autodoc imports your module</strong>
+        <p>It walks every class and function and pulls out their docstrings.</p>
+      </div>
+    </div>
+    <div class="chain-step">
+      <div class="chain-left">
+        <div class="chain-dot">4</div>
+        <div class="chain-line"></div>
+      </div>
+      <div class="chain-content">
+        <strong>sphinx.ext.napoleon translates the docstrings</strong>
+        <p>Converts <code>Args:</code>, <code>Returns:</code>, <code>Raises:</code> sections into Sphinx's native format.</p>
+      </div>
+    </div>
+    <div class="chain-step">
+      <div class="chain-left">
+        <div class="chain-dot">5</div>
+      </div>
+      <div class="chain-content">
+        <strong>sphinx-build renders HTML</strong>
+        <p>Output lands in <code>docs/_build/html/</code>. Open <code>index.html</code> in any browser.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>Google-Style Docstrings — Format</h2>
+
+  <p>This is what you write in your <code>.py</code> files. Napoleon parses this format.</p>
+
+<pre><span class="keyword">def</span> <span class="funcname">set_label</span>(self, experiment_id: <span class="typename">int</span>, timestep: <span class="typename">int</span>, new_label: <span class="typename">str</span>) -&gt; <span class="typename">bool</span>:
+    <span class="docstr">"""Update a frame's label and push the old value onto the undo stack.
+
+    Args:
+        experiment_id: The experiment this frame belongs to.
+        timestep: The frame's timestep integer.
+        new_label: One of the LABELS constants (e.g. "Convection").
+
+    Returns:
+        True on success, False if the frame row does not exist.
+
+    Raises:
+        ValueError: If new_label is not a recognised label string.
+    """</span>
+    ...
+
+<span class="comment"># ↑ Types live ONLY on the signature — never repeat them in Args.</span></pre>
+
+  <p>With <code>autodoc_typehints = "description"</code> in <code>conf.py</code>, Sphinx reads the types
+  from the signature and injects them next to each argument's description in the rendered HTML.
+  The reader sees everything in one place:</p>
+
+<pre><span class="comment">  experiment_id  (int)  – The experiment this frame belongs to.
+  timestep       (int)  – The frame's timestep integer.
+  new_label      (str)  – One of the LABELS constants (e.g. "Convection").
+
+  Returns:
+  bool           – True on success, False if the frame row does not exist.</span></pre>
+
+  <p>You only ever write the type once — on the function signature — and it flows into
+  both your IDE's hover tooltip <em>and</em> the generated documentation automatically.</p>
+
+  <div class="callout callout-green">
+    <strong>Rule:</strong> signature = types &nbsp;|&nbsp; docstring = descriptions &nbsp;|&nbsp; Sphinx bridges them.
+  </div>
+
+  <h3>Supported sections</h3>
+
+  <table>
+    <tr><th>Section</th><th>When to use</th></tr>
+    <tr><td>Args:</td><td>Document every parameter.</td></tr>
+    <tr><td>Returns:</td><td>Describe the return value and its type.</td></tr>
+    <tr><td>Raises:</td><td>List exceptions the function can raise.</td></tr>
+    <tr><td>Example:</td><td>Show a usage snippet. Sphinx renders it as a code block.</td></tr>
+    <tr><td>Note:</td><td>Important caveats or side-effects.</td></tr>
+  </table>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>Module-Level Docstring</h2>
+
+  <p>
+    The string at the very top of a <code>.py</code> file (before any imports) is the
+    <strong>module docstring</strong>. Sphinx renders it as the intro paragraph for
+    that module's page — the right place for "what this module does and how it
+    connects to the rest of the system."
+  </p>
+
+<pre><span class="docstr">"""
+db.py — LabelDB
+
+The single source of truth for all persistence in the labeler.
+All reads and writes to SQLite go through LabelDB exclusively.
+
+Role in the system:
+    - Written to by scanner.py — upserts experiments and frames.
+    - Read/written by api.py — serves data to the frontend.
+    - Independent of Flask, Scanner, Suggester (pure stdlib only).
+"""</span>
+
+<span class="keyword">import</span> sqlite3
+...</pre>
+
+  <div class="callout callout-green">
+    This replaces the manual index you would otherwise write at the top of each file.
+    One docstring = one source of truth.
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>Cross-Referencing Between Functions and Classes</h2>
+
+  <p>
+    Sphinx has its own inline markup called <strong>roles</strong>. A role lets you
+    embed a live hyperlink to any other documented symbol — a class, a method, a
+    function, or a whole module — directly inside a docstring.
+    The syntax is always the same:
+  </p>
+
+  <div class="card" style="font-family: monospace; font-size: 0.95rem; letter-spacing: 0.02em;">
+    :role:<span style="color: var(--accent2);">`target`</span>
+  </div>
+
+  <p>
+    When Sphinx builds the docs it resolves the target to the correct page,
+    replaces the markup with the symbol name, and wraps it in a clickable link.
+    If the target can't be found you get a build warning — which is also useful
+    as a broken-link detector.
+  </p>
+
+  <h3>The roles you'll use most</h3>
+
+  <table>
+    <tr><th>Role</th><th>Points at</th><th>Example</th></tr>
+    <tr><td>:class:</td><td>A class</td><td><code>:class:`LabelDB`</code></td></tr>
+    <tr><td>:func:</td><td>A module-level function</td><td><code>:func:`scan_experiments`</code></td></tr>
+    <tr><td>:meth:</td><td>A method on a class</td><td><code>:meth:`LabelDB.set_label`</code></td></tr>
+    <tr><td>:attr:</td><td>A class or instance attribute</td><td><code>:attr:`LabelDB.conn`</code></td></tr>
+    <tr><td>:mod:</td><td>A whole module</td><td><code>:mod:`labeler.db`</code></td></tr>
+    <tr><td>:data:</td><td>A module-level constant</td><td><code>:data:`LABELS`</code></td></tr>
+    <tr><td>:exc:</td><td>An exception class</td><td><code>:exc:`ValueError`</code></td></tr>
+  </table>
+
+  <h3>Fully-qualified vs. local names</h3>
+
+  <p>
+    Inside a module's own docstrings, Sphinx searches the current module first, so
+    you can use the short name. For symbols that live in another module you need the
+    full dotted path:
+  </p>
+
+<pre><span class="comment"># Inside labeler/api.py — referencing something in labeler/db.py</span>
+
+<span class="keyword">def</span> <span class="funcname">apply_label</span>(experiment_id: <span class="typename">int</span>, timestep: <span class="typename">int</span>, label: <span class="typename">str</span>) -&gt; <span class="typename">None</span>:
+    <span class="docstr">"""Apply a label to a frame and persist it.
+
+    Delegates to :meth:`labeler.db.LabelDB.set_label` for the actual
+    database write.  The allowed label strings are defined in
+    :data:`labeler.db.LABELS`.
+
+    Args:
+        experiment_id: Foreign key into :class:`labeler.db.LabelDB`.
+        timestep: Frame index within the experiment.
+        label: One of the values in :data:`labeler.db.LABELS`.
+    """</span>
+    ...</pre>
+
+  <h3>Cross-referencing within the same module</h3>
+
+  <p>
+    When both symbols live in the same file, drop the module prefix entirely —
+    Sphinx resolves them automatically:
+  </p>
+
+<pre><span class="comment"># Inside labeler/db.py</span>
+
+<span class="keyword">def</span> <span class="funcname">undo_label</span>(self, experiment_id: <span class="typename">int</span>, timestep: <span class="typename">int</span>) -&gt; <span class="typename">bool</span>:
+    <span class="docstr">"""Revert the most recent label change for a frame.
+
+    Pops the undo stack populated by :meth:`set_label`.
+
+    Returns:
+        True if a previous value was restored, False if the stack was empty.
+    """</span>
+    ...</pre>
+
+  <h3>The tilde shorthand</h3>
+
+  <p>
+    Fully-qualified names can be verbose inside prose. Prefix the target with
+    <code>~</code> and Sphinx shows only the last component while still linking to
+    the full path:
+  </p>
+
+<pre><span class="comment"># Written in the docstring:        displayed in the HTML as:</span>
+:meth:`~labeler.db.LabelDB.set_label`   <span class="comment">→  set_label  (still a clickable link)</span>
+:class:`~labeler.db.LabelDB`            <span class="comment">→  LabelDB</span>
+:mod:`~labeler.db`                      <span class="comment">→  db</span></pre>
+
+  <h3>See Also section — the right place for cross-references</h3>
+
+  <p>
+    Napoleon supports a <code>See Also:</code> section that is perfect for listing
+    related symbols without cluttering the description:
+  </p>
+
+<pre><span class="keyword">def</span> <span class="funcname">get_experiment_progress</span>(self, experiment_id: <span class="typename">int</span>) -&gt; <span class="typename">dict</span>:
+    <span class="docstr">"""Return labeling progress for one experiment.
+
+    Args:
+        experiment_id: Primary key of the experiment.
+
+    Returns:
+        Dict with keys ``total``, ``labeled``, ``unlabeled``.
+
+    See Also:
+        :meth:`set_label` — the method that advances the labeled count.
+        :meth:`undo_label` — reverses the last label applied.
+        :mod:`labeler.api` — the Flask layer that calls this method.
+    """</span>
+    ...</pre>
+
+  <div class="callout callout-green">
+    Cross-references are validated at build time. If you rename a method and forget
+    to update a reference, <code>sphinx-build</code> prints a warning.
+    Treat those warnings like compiler errors — fix them before committing.
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>Key Files in This Project</h2>
+
+  <table>
+    <tr><th>File</th><th>Role</th></tr>
+    <tr><td>docs/conf.py</td><td>Sphinx configuration — extensions, theme, sys.path setup.</td></tr>
+    <tr><td>docs/index.rst</td><td>Table of contents for the doc site.</td></tr>
+    <tr><td>docs/api/db.rst</td><td>One-liner that tells autodoc to document <code>labeler.db</code>.</td></tr>
+    <tr><td>docs/api/scanner.rst</td><td>Same for <code>labeler.scanner</code>.</td></tr>
+    <tr><td>docs/api/suggester.rst</td><td>Same for <code>labeler.suggester</code>.</td></tr>
+    <tr><td>docs/api/api.rst</td><td>Same for <code>labeler.api</code>.</td></tr>
+    <tr><td>docs/_build/html/</td><td>Generated output — never edit manually, always regenerate.</td></tr>
+  </table>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>How to Build and Read the Docs</h2>
+
+  <div class="cmd-box">
+    <span class="prompt"># From the project root:</span><br>
+    <span class="cmd">.venv/bin/sphinx-build -b html docs docs/_build/html</span><br><br>
+    <span class="prompt"># Then open in your browser:</span><br>
+    <span class="cmd">open docs/_build/html/index.html</span>
+  </div>
+
+  <p>
+    After the build, you'll see a website with one page per module. Each page shows:
+  </p>
+  <ul style="margin: 0.5rem 0 1rem 1.5rem; color: var(--muted);">
+    <li>The module docstring as the intro.</li>
+    <li>Every class and its docstring.</li>
+    <li>Every method with its Args / Returns / Raises tables.</li>
+    <li>A <strong>[source]</strong> link that shows the actual code (from <code>viewcode</code> extension).</li>
+  </ul>
+
+  <div class="callout">
+    The <code>docs/_build/</code> folder is generated output — add it to <code>.gitignore</code>.
+    Only commit the source files (<code>conf.py</code>, <code>index.rst</code>, <code>api/*.rst</code>).
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <h2>IDE Integration</h2>
+
+  <p>
+    You don't need to build docs to benefit from Google-style docstrings.
+    Both <strong>PyCharm</strong> and <strong>VS Code with Pylance</strong> parse them natively:
+  </p>
+  <ul style="margin: 0.5rem 0 1rem 1.5rem; color: var(--muted);">
+    <li>Hover over any function call → see its docstring inline.</li>
+    <li>Auto-complete shows parameter descriptions.</li>
+    <li>No plugin or build step needed — it just works.</li>
+  </ul>
+
+</div>
+</body>
+</html>
