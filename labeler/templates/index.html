@@ -26,7 +26,7 @@
   --c-bug:         #f05a5a;
   --c-empty:       #64748b;
   --c-forming:     #3b82f6;
-  --c-convection:  #10b981;
+  --c-conduction:  #10b981;
   --c-keyhole:     #f59e0b;
 }
 
@@ -494,9 +494,9 @@ header .spacer { flex: 1; }
   <!-- ── Comparison View ──────────────────────────────────────── -->
   <div id="view-compare">
     <div class="cmp-body">
-      <!-- Convection panel -->
+      <!-- Conduction panel -->
       <div class="cmp-panel">
-        <div class="cmp-label-hdr" style="color:var(--c-convection)">Convection</div>
+        <div class="cmp-label-hdr" style="color:var(--c-conduction)">Conduction</div>
         <div class="cmp-morph-box" id="cmp-conv-box">
           <div class="lb-morph-placeholder"><span>No morph yet</span></div>
         </div>
@@ -657,7 +657,7 @@ header .spacer { flex: 1; }
 
 const LABELS = [
   "Unlabeled","Unsure","Screenshot Bug",
-  "Initial Emptiness","Forming Phase","Convection","Keyhole"
+  "Initial Emptiness","Forming Phase","Conduction","Keyhole"
 ];
 
 const LABEL_COLOR = {
@@ -666,7 +666,7 @@ const LABEL_COLOR = {
   "Screenshot Bug":    "var(--c-bug)",
   "Initial Emptiness": "var(--c-empty)",
   "Forming Phase":     "var(--c-forming)",
-  "Convection":        "var(--c-convection)",
+  "Conduction":        "var(--c-conduction)",
   "Keyhole":           "var(--c-keyhole)",
 };
 
@@ -906,7 +906,7 @@ function renderDashboard(exps) {
                 onclick="openVoting(${exp.id})"
                 ${votingReady ? '' : 'disabled title="Complete both rounds first"'}>${votingLabel}</button>
         ${stage === 'done' ? `<button class="btn sm primary" onclick="openReview(${exp.id})" title="Review final labels">Review</button>` : ''}
-        <button class="btn sm" onclick="openComparison(${exp.id})" title="Compare Convection vs Keyhole morphs">⊡ Cmp</button>
+        <button class="btn sm" onclick="openComparison(${exp.id})" title="Compare Conduction vs Keyhole morphs">⊡ Cmp</button>
         <button class="btn sm" onclick="resetExperiment(${exp.id})" title="Full reset" style="color:var(--muted)">↺</button>
       </div></td>
     </tr>`;
@@ -1745,12 +1745,12 @@ async function lbNextExperiment() {
 let cmpExpId    = null;
 let cmpPollTimer = null;
 let cmpStatus   = {};
-let cmpCounts   = { 'Convection': 0, 'Keyhole': 0 };
+let cmpCounts   = { 'Conduction': 0, 'Keyhole': 0 };
 
 async function openComparison(expId) {
   cmpExpId   = expId;
   cmpStatus  = {};
-  cmpCounts  = { 'Convection': 0, 'Keyhole': 0 };
+  cmpCounts  = { 'Conduction': 0, 'Keyhole': 0 };
   if (cmpPollTimer) { clearInterval(cmpPollTimer); cmpPollTimer = null; }
   const expData = allExperiments.find(e => e.id === expId);
   try {
@@ -1764,7 +1764,7 @@ async function openComparison(expId) {
     cmpStatus = status;
     showCompareView(expData);
     renderCmpPanels();
-    if (['Convection', 'Keyhole'].some(l => cmpStatus[l] === 'computing'))
+    if (['Conduction', 'Keyhole'].some(l => cmpStatus[l] === 'computing'))
       cmpPollTimer = setInterval(fetchCmpStatus, 2000);
   } catch(e) { toast("Failed to load: " + e.message); }
 }
@@ -1806,14 +1806,14 @@ async function fetchCmpStatus() {
     const status = await get(`/api/composites/${cmpExpId}/status`);
     cmpStatus = status;
     renderCmpPanels();
-    if (!['Convection', 'Keyhole'].some(l => status[l] === 'computing')) {
+    if (!['Conduction', 'Keyhole'].some(l => status[l] === 'computing')) {
       clearInterval(cmpPollTimer); cmpPollTimer = null;
     }
   } catch {}
 }
 
 function renderCmpPanels() {
-  _renderCmpPanel('Convection', 'convection', 'cmp-conv');
+  _renderCmpPanel('Conduction', 'conduction', 'cmp-conv');
   _renderCmpPanel('Keyhole',    'keyhole',    'cmp-key');
 }
 

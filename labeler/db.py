@@ -30,7 +30,7 @@ LABELS = [
     "Screenshot Bug",    # 3 — rendering artifact
     "Initial Emptiness", # 4 — before melt pool forms
     "Forming Phase",     # 5 — melt pool beginning to form
-    "Convection",        # 6 — stable convective melt pool
+    "Conduction",        # 6 — stable conductive melt pool
     "Keyhole",           # 7 — keyhole regime
 ]
 

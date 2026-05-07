@@ -66,10 +66,10 @@ Timestep is an integer. Sort ascending for temporal order.
 | 3 | Screenshot Bug     | `3`     | Anomaly / rendering artifact.      |
 | 4 | Initial Emptiness  | `4`     | Before melt pool forms.            |
 | 5 | Forming Phase      | `5`     | Melt pool beginning to form.       |
-| 6 | Convection         | `6`     | Stable convective melt pool.       |
+| 6 | Conduction         | `6`     | Stable conductive melt pool.       |
 | 7 | Keyhole            | `7`     | Keyhole regime.                    |
 
-Rough expected temporal order: Initial Emptiness → Forming Phase → Convection → Keyhole, but this is not enforced. Screenshot Bug and Unsure can appear anywhere.
+Rough expected temporal order: Initial Emptiness → Forming Phase → Conduction → Keyhole, but this is not enforced. Screenshot Bug and Unsure can appear anywhere.
 
 ---
 
@@ -148,7 +148,7 @@ An **experiment** is identified by `(P, VX, LS, ST)`. The folder path is stored 
 - Future suggesters slot in by subclassing (e.g. ML-based, rule-based, etc.).
 - Selectable at launch via CLI flag (e.g. `--suggester dummy`).
 - Toggle on/off from the UI menu at runtime (for performance).
-- When active, suggestion shown in Label Mode as a subtle chip (e.g. "Suggestion: Convection"). User can accept with a shortcut key or ignore.
+- When active, suggestion shown in Label Mode as a subtle chip (e.g. "Suggestion: Conduction"). User can accept with a shortcut key or ignore.
 - When off or when suggester returns `None`, nothing shown.
 
 #### App Layer — Flask + frontend
@@ -211,7 +211,7 @@ An **experiment** is identified by `(P, VX, LS, ST)`. The folder path is stored 
 
 ### Inside experiment (Label or Review)
 - Per-experiment % labeled
-- Class breakdown: e.g. `14 Forming, 30 Convection, 12 Keyhole, 3 Unsure, 8 Unlabeled`
+- Class breakdown: e.g. `14 Forming, 30 Conduction, 12 Keyhole, 3 Unsure, 8 Unlabeled`
 
 ---
 

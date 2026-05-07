@@ -75,7 +75,7 @@ Action buttons per row:
 - **R1** — open the experiment for Round 1 labeling
 - **R2** — open for Round 2 (enabled once Round 1 is 100 % complete)
 - **Voting** — start the agreement/conflict-resolution phase (enabled once both rounds are 100 % complete)
-- **⊡ Cmp** — open the Comparison view to see averaged morphs for Convection vs Keyhole
+- **⊡ Cmp** — open the Comparison view to see averaged morphs for Conduction vs Keyhole
 - **↺** — reset all labels for this experiment
 
 ---
@@ -98,7 +98,7 @@ When you open an experiment, you see:
 | `3` | Screenshot Bug |
 | `4` | Initial Emptiness |
 | `5` | Forming Phase |
-| `6` | Convection |
+| `6` | Conduction |
 | `7` | Keyhole |
 | `Ctrl+Z` | Undo last label |
 | `b` | Toggle Bug Free flag |
@@ -151,7 +151,7 @@ Once both rounds are complete, click **Voting** on the dashboard.
 
 Click **⊡ Cmp** for any experiment to open a side-by-side comparison of:
 
-- **Convection** averaged morph (left)
+- **Conduction** averaged morph (left)
 - **Keyhole** averaged morph (right)
 
 Use this to visually verify that the two classes look distinctly different.
