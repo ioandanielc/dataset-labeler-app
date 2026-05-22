@@ -28,6 +28,7 @@
   --c-forming:     #3b82f6;
   --c-conduction:  #10b981;
   --c-keyhole:     #f59e0b;
+  --c-scanning-stopped: #e879f9;
 }
 
 body {
@@ -657,7 +658,7 @@ header .spacer { flex: 1; }
 
 const LABELS = [
   "Unlabeled","Unsure","Screenshot Bug",
-  "Initial Emptiness","Forming Phase","Conduction","Keyhole"
+  "Initial Emptiness","Forming Phase","Conduction","Keyhole","Scanning Stopped"
 ];
 
 const LABEL_COLOR = {
@@ -668,6 +669,7 @@ const LABEL_COLOR = {
   "Forming Phase":     "var(--c-forming)",
   "Conduction":        "var(--c-conduction)",
   "Keyhole":           "var(--c-keyhole)",
+  "Scanning Stopped":  "var(--c-scanning-stopped)",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1975,7 +1977,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "z" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); lbUndo(); }
   else if (!lb.readOnly) {
     const d = parseInt(e.key);
-    if (d >= 1 && d <= 7) { e.preventDefault(); lbSetLabel(LABELS[d - 1]); }
+    if (d >= 1 && d <= 8) { e.preventDefault(); lbSetLabel(LABELS[d - 1]); }
     else if (e.key === "b") { e.preventDefault(); cycleBool("bug_free"); }
     else if (e.key === "f") { e.preventDefault(); cycleBool("correctly_finished"); }
   }
