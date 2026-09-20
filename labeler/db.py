@@ -40,12 +40,15 @@ LABELS = [
 #: Maps keyboard shortcut digit → label name, e.g. ``{"1": "Unlabeled", ...}``.
 SHORTCUT_TO_LABEL: dict[str, str] = {str(i + 1): label for i, label in enumerate(LABELS)}
 
-#: Extra column written alongside ``label`` for each labeling stage.
-_STAGE_COLUMNS: dict[str, str] = {
-    "round_1":    "label_1",
-    "round_2":    "label_2",
-    "correction": "label_final",
-    "done":       "label_final",
+#: Extra columns written alongside ``label`` for each labeling stage.  A stage
+#: may write more than one: ``single`` keeps all three in lockstep so a one-pass
+#: experiment exports identical label_1 / label_2 / label_final values.
+_STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "round_1":    ("label_1",),
+    "round_2":    ("label_2",),
+    "correction": ("label_final",),
+    "done":       ("label_final",),
+    "single":     ("label_1", "label_2", "label_final"),
 }
 
 # ---------------------------------------------------------------------------
@@ -272,11 +275,12 @@ class LabelDB:
     ) -> Optional[dict]:
         """Apply many label changes to one experiment in a single transaction.
 
-        The column written alongside ``label`` depends on the experiment's
+        The columns written alongside ``label`` depend on the experiment's
         current labeling_stage:
           - round_1: label_1
           - round_2: label_2
           - correction / done: label_final
+          - single: label_1, label_2 and label_final together
 
         In ``correction`` stage the experiment advances to ``done`` once no
         unresolved conflicts remain.
@@ -300,7 +304,7 @@ class LabelDB:
             if exp_row is None:
                 return None
             stage = exp_row["labeling_stage"]
-            extra_col = _STAGE_COLUMNS.get(stage)
+            extra_cols = _STAGE_COLUMNS.get(stage, ())
 
             wanted: dict[int, str] = {}
             for timestep, label in changes:
@@ -308,30 +312,34 @@ class LabelDB:
             if not wanted:
                 return {"matched": [], "changed": [], "stage": stage, "stage_changed": False}
 
-            rows = self._rows_for(experiment_id, wanted.keys(), extra_col)
+            rows = self._rows_for(experiment_id, wanted.keys(), extra_cols)
             matched = sorted(rows)
-            # (timestep, old label, old stage-column value, new label) — the
-            # old stage-column value is kept so undo can restore it exactly.
-            written: list[tuple[int, str, Optional[str], str]] = []
+            # (timestep, old label, old stage-column values, new label) — the
+            # old stage-column values are kept so undo can restore them exactly.
+            written: list[tuple[int, str, tuple, str]] = []
             for timestep in matched:
                 row       = rows[timestep]
                 new       = wanted[timestep]
                 old       = row["label"]
-                old_extra = row[extra_col] if extra_col else None
-                # A frame whose `label` already matches may still need the
-                # stage column filled in (e.g. resolving a conflict in favour
-                # of the round-1 label), so compare both columns.
-                if old != new or (extra_col and old_extra != new):
+                old_extra = tuple(row[col] for col in extra_cols)
+                # A frame whose `label` already matches may still need a stage
+                # column filled in (e.g. resolving a conflict in favour of the
+                # round-1 label), so compare every column.
+                if old != new or any(v != new for v in old_extra):
                     written.append((timestep, old, old_extra, new))
 
             if written:
-                if extra_col:
+                if extra_cols:
+                    assigns = ", ".join(f"{col} = ?" for col in extra_cols)
                     sql = (
-                        f"UPDATE frames SET label = ?, {extra_col} = ?, "
+                        f"UPDATE frames SET label = ?, {assigns}, "
                         "updated_at = CURRENT_TIMESTAMP "
                         "WHERE experiment_id = ? AND timestep = ?"
                     )
-                    params = [(new, new, experiment_id, ts) for ts, _o, _oe, new in written]
+                    params = [
+                        (new, *([new] * len(extra_cols)), experiment_id, ts)
+                        for ts, _o, _oe, new in written
+                    ]
                 else:
                     sql = (
                         "UPDATE frames SET label = ?, updated_at = CURRENT_TIMESTAMP "
@@ -423,10 +431,10 @@ class LabelDB:
                 grouped=True,
             )
 
-    def _rows_for(self, experiment_id: int, timesteps, extra_col: Optional[str] = None) -> dict:
+    def _rows_for(self, experiment_id: int, timesteps, extra_cols: tuple = ()) -> dict:
         """Fetch ``{timestep: row}`` for specific timesteps, chunked to stay
         under SQLite's bound-parameter limit."""
-        cols = "timestep, label" + (f", {extra_col}" if extra_col else "")
+        cols = ", ".join(("timestep", "label", *extra_cols))
         ts_list = list(timesteps)
         out: dict[int, sqlite3.Row] = {}
         for i in range(0, len(ts_list), 400):
@@ -445,9 +453,10 @@ class LabelDB:
         """Revert the last label operation by popping the undo stack.
 
         One operation is one key press (a single frame) or one bulk fill (every
-        frame it touched).  The stage-specific column written at the time
-        (label_1, label_2 or label_final) is reverted too, and a
-        correction→done transition caused by the operation is rolled back.
+        frame it touched).  The stage-specific columns written at the time
+        (label_1, label_2, label_final, or all three in single-pass mode) are
+        reverted too, and a correction→done transition caused by the operation
+        is rolled back.
 
         Returns:
             A dict ``{experiment_id, timestep, reverted_to, was, count,
@@ -462,16 +471,17 @@ class LabelDB:
             op            = self._undo_stack.pop()
             experiment_id = op["experiment_id"]
             stage         = op["stage"]
-            extra_col     = _STAGE_COLUMNS.get(stage)
+            extra_cols    = _STAGE_COLUMNS.get(stage, ())
 
-            if extra_col:
+            if extra_cols:
+                assigns = ", ".join(f"{col} = ?" for col in extra_cols)
                 sql = (
-                    f"UPDATE frames SET label = ?, {extra_col} = ?, "
+                    f"UPDATE frames SET label = ?, {assigns}, "
                     "updated_at = CURRENT_TIMESTAMP "
                     "WHERE experiment_id = ? AND timestep = ?"
                 )
                 params = [
-                    (old, old_extra, experiment_id, ts)
+                    (old, *old_extra, experiment_id, ts)
                     for ts, old, old_extra, _new in op["changes"]
                 ]
             else:
@@ -556,8 +566,50 @@ class LabelDB:
         return {row[0] for row in cur.fetchall()}
 
     # ------------------------------------------------------------------
-    # Two-pass workflow methods
+    # Labeling workflow methods
     # ------------------------------------------------------------------
+
+    def start_single(self, experiment_id: int) -> dict:
+        """Put an experiment into the one-pass ``single`` stage.
+
+        Single-pass labeling has no second round and no voting: every write
+        fills label_1, label_2 and label_final at once, so the exported CSV
+        carries the same value in all three columns.  The experiment stays in
+        this stage for good — later corrections keep the three columns in step.
+
+        Labels already present are collapsed onto one value (label_final wins,
+        then label_1, then label_2), so an experiment part-labeled in the
+        two-pass flow keeps its work.
+
+        Args:
+            experiment_id: The experiment to switch.
+
+        Returns:
+            ``{"stage": "single"}``
+        """
+        with self._lock:
+            # `label` is the fallback for rows written before the per-pass
+            # columns existed.  SQL evaluates every right-hand side against the
+            # original row, so the four COALESCEs all see the same values.
+            self._conn.execute(
+                """
+                UPDATE frames SET
+                    label       = COALESCE(label_final, label_1, label_2, label),
+                    label_1     = COALESCE(label_final, label_1, label_2, NULLIF(label, 'Unlabeled')),
+                    label_2     = COALESCE(label_final, label_1, label_2, NULLIF(label, 'Unlabeled')),
+                    label_final = COALESCE(label_final, label_1, label_2, NULLIF(label, 'Unlabeled')),
+                    updated_at  = CURRENT_TIMESTAMP
+                WHERE experiment_id = ? AND missing = 0
+                """,
+                (experiment_id,),
+            )
+            self._conn.execute(
+                "UPDATE experiments SET labeling_stage = 'single' WHERE id = ?",
+                (experiment_id,),
+            )
+            self._conn.commit()
+            self._undo_stack.clear()
+            return {"stage": "single"}
 
     def start_round_2(self, experiment_id: int) -> dict:
         """Transition an experiment to round_2 (can be called at any time during round_1).
@@ -900,9 +952,10 @@ class LabelDB:
             p1_pct = round(p1 / frame_total * 100, 1) if frame_total > 0 else 0.0
             p2_pct = round(p2 / frame_total * 100, 1) if frame_total > 0 else 0.0
 
-            # Agreement stats
+            # Agreement stats — meaningless in single-pass mode, where the two
+            # columns are copies of one another by construction.
             confusion = confusion_data.get(exp_id, {})
-            n_comparable = sum(confusion.values())
+            n_comparable = 0 if stage == "single" else sum(confusion.values())
             if n_comparable > 0:
                 agreed = sum(v for (l1, l2), v in confusion.items() if l1 == l2)
                 agree_pct = round(agreed / n_comparable * 100, 1)
@@ -980,7 +1033,9 @@ class LabelDB:
     def reset_experiment(self, experiment_id: int) -> int:
         """Set all non-missing frames back to Unlabeled, clearing two-pass columns.
 
-        Also resets the labeling_stage to round_1.
+        Also resets the labeling_stage to round_1 — except for single-pass
+        experiments, which stay in the ``single`` stage because that is a
+        global workflow choice, not labeling progress.
         Clears the undo stack since this bulk operation cannot be meaningfully
         undone frame-by-frame.
 
@@ -1000,7 +1055,8 @@ class LabelDB:
             (experiment_id,),
         )
         self._conn.execute(
-            "UPDATE experiments SET labeling_stage = 'round_1' WHERE id = ?",
+            "UPDATE experiments SET labeling_stage = 'round_1' "
+            "WHERE id = ? AND labeling_stage != 'single'",
             (experiment_id,),
         )
         self._conn.commit()
@@ -1011,7 +1067,8 @@ class LabelDB:
         """Reset ALL frames across ALL experiments to Unlabeled.
 
         Clears label_1, label_2, label_final, resets every experiment's
-        labeling_stage back to round_1.  Intended as a full restart.
+        labeling_stage back to round_1 (single-pass experiments stay in the
+        ``single`` stage).  Intended as a full restart.
 
         Returns:
             Total number of frames reset.
@@ -1025,7 +1082,10 @@ class LabelDB:
             """
         )
         self._conn.execute(
-            "UPDATE experiments SET labeling_stage = 'round_1', bug_free = NULL, correctly_finished = NULL"
+            "UPDATE experiments SET labeling_stage = 'round_1' WHERE labeling_stage != 'single'"
+        )
+        self._conn.execute(
+            "UPDATE experiments SET bug_free = NULL, correctly_finished = NULL"
         )
         self._conn.commit()
         self._undo_stack.clear()
@@ -1038,6 +1098,9 @@ class LabelDB:
         Pass 2 reset clears label_2/label_final (and ``label`` if in round_2 or later).
         Stage is also reverted appropriately.
 
+        A single-pass experiment has only one pass, so either *pass_num*
+        clears every label column for it.
+
         Args:
             experiment_id: The experiment to partially reset.
             pass_num: 1 or 2.
@@ -1049,6 +1112,21 @@ class LabelDB:
             "SELECT labeling_stage FROM experiments WHERE id = ?", (experiment_id,)
         ).fetchone()
         stage = exp_row["labeling_stage"] if exp_row else "round_1"
+
+        if stage == "single":
+            # One pass, one reset: wipe all three columns and stay in `single`.
+            cur = self._conn.execute(
+                """
+                UPDATE frames
+                SET label = 'Unlabeled', label_1 = NULL, label_2 = NULL, label_final = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE experiment_id = ? AND missing = 0
+                """,
+                (experiment_id,),
+            )
+            self._conn.commit()
+            self._undo_stack.clear()
+            return cur.rowcount
 
         if pass_num == 1:
             # Clear label_1; if currently in round_1, also reset active label
@@ -1121,20 +1199,25 @@ class LabelDB:
 
         Args:
             rows: List of dicts parsed from an uploaded CSV.
-            pass_num: 1, 2, or "voting" (imports into label_final).
+            pass_num: 1, 2, "voting" (imports into label_final), or "single"
+                (writes all three columns at once).
 
         Returns:
             ``{"updated": n, "skipped": n}``
         """
-        if pass_num == "voting":
-            col = "label_final"
+        if pass_num == "single":
+            cols = ("label_1", "label_2", "label_final")
+            active_stage = "single"
+        elif pass_num == "voting":
+            cols = ("label_final",)
             active_stage = "correction"   # mirror to label when in correction
         elif pass_num == 2:
-            col = "label_2"
+            cols = ("label_2",)
             active_stage = "round_2"
         else:
-            col = "label_1"
+            cols = ("label_1",)
             active_stage = "round_1"
+        col = cols[0]
 
         updated = 0
         skipped = 0
@@ -1161,12 +1244,13 @@ class LabelDB:
                 continue
 
             exp_id, stage = exp_lookup[name]
+            assigns = ", ".join(f"{c} = ?" for c in cols)
             cur = self._conn.execute(
                 f"""
-                UPDATE frames SET {col} = ?, updated_at = CURRENT_TIMESTAMP
+                UPDATE frames SET {assigns}, updated_at = CURRENT_TIMESTAMP
                 WHERE experiment_id = ? AND timestep = ? AND missing = 0
                 """,
-                (label, exp_id, timestep),
+                (*([label] * len(cols)), exp_id, timestep),
             )
             if cur.rowcount == 0:
                 skipped += 1
@@ -1189,6 +1273,10 @@ class LabelDB:
 
     def export_csv(self, which: str = "all") -> str:
         """Export all non-missing frames as a CSV string.
+
+        Single-pass experiments write all three label columns on every change,
+        so their rows carry the same value in label_1, label_2 and label_final
+        whichever *which* is chosen.
 
         Args:
             which: One of ``"all"`` (all three label columns),

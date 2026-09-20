@@ -13,8 +13,11 @@ GET  /api/frames/<experiment_id>/<timestep>   — single frame (with suggestion)
 PATCH /api/frames/<experiment_id>/<timestep>  — set label
 PATCH /api/frames/<experiment_id>/bulk        — set many labels in one request
 POST /api/experiments/<id>/fill_from          — label a timestep and all later ones
+POST /api/experiments/<id>/start_single       — switch to one-pass labeling
 POST /api/undo                                — undo last label change
 POST /api/scan                                — trigger diff re-scan
+GET  /api/config                              — data root + labeling mode
+POST /api/settings/labeling_mode              — switch single-pass / two-pass
 GET  /api/progress                            — global progress summary
 GET  /api/suggester                           — suggester state
 POST /api/suggester/toggle                    — toggle suggester on/off
@@ -112,14 +115,38 @@ def _compute_composite_image(
     return True
 
 
-# Path of the saved-root config file — one level up from this package file.
+# Path of the saved-settings config file — one level up from this package file.
 _CONFIG_FILE = Path(__file__).parent.parent / "labeler_config.json"
+
+#: Global labeling workflows.  ``two_pass`` is the round 1 → round 2 → voting
+#: flow; ``single_pass`` is one final pass per experiment, no voting.
+LABELING_MODES = ("two_pass", "single_pass")
+
+
+def read_config() -> dict:
+    """Return the saved settings, or ``{}`` if the file is absent or broken."""
+    try:
+        data = json.loads(_CONFIG_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_config(**updates) -> None:
+    """Merge *updates* into the config file, leaving the other settings alone."""
+    cfg = read_config()
+    cfg.update(updates)
+    try:
+        _CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    except Exception:
+        pass
 
 
 def create_app(
     root: str | Path | None = None,
     db_path: str | Path | None = None,
     suggester_name: str = "dummy",
+    labeling_mode: str | None = None,
 ) -> Flask:
     """Create and configure the Flask application.
 
@@ -130,6 +157,8 @@ def create_app(
         db_path: Path for the SQLite DB file.  Defaults to
             ``{root}/labeler.db``.
         suggester_name: Name of the suggester to use (e.g. ``"dummy"``).
+        labeling_mode: ``"two_pass"`` or ``"single_pass"``.  When ``None`` the
+            last mode chosen in the UI is restored from the config file.
 
     Returns:
         A configured :class:`flask.Flask` instance.
@@ -159,6 +188,11 @@ def create_app(
     app.suggester_enabled: bool = True
     app.data_root: Path = root
     app.is_configured: bool = _configured
+
+    # Global workflow choice — picked once in the dashboard rather than per
+    # experiment, and remembered across restarts.
+    _mode = labeling_mode or read_config().get("labeling_mode") or "two_pass"
+    app.labeling_mode: str = _mode if _mode in LABELING_MODES else "two_pass"
 
     # Composite cache: {root}/.labeler_cache/composites/{exp_id}/{label_slug}.{png,json}
     app.composite_dir: Path = root / ".labeler_cache" / "composites"
@@ -273,6 +307,7 @@ def create_app(
         return jsonify({
             "root": str(app.data_root) if app.is_configured else None,
             "configured": app.is_configured,
+            "labeling_mode": app.labeling_mode,
         })
 
     @app.route("/api/config", methods=["POST"])
@@ -301,13 +336,25 @@ def create_app(
             pass
 
         # Persist so the next `python run.py` remembers the path
-        try:
-            _CONFIG_FILE.write_text(json.dumps({"root": str(new_root)}))
-        except Exception:
-            pass
+        _write_config(root=str(new_root))
 
         summary = app.scanner.scan()
         return jsonify({"root": str(new_root), "configured": True, "scan": summary})
+
+    # ------------------------------------------------------------------
+    # Labeling mode (single-pass / two-pass)
+    # ------------------------------------------------------------------
+
+    @app.route("/api/settings/labeling_mode", methods=["POST"])
+    def set_labeling_mode():
+        """Switch the global workflow and remember it for the next launch."""
+        body = request.get_json(silent=True) or {}
+        mode = body.get("mode")
+        if mode not in LABELING_MODES:
+            abort(400, description=f"mode must be one of: {list(LABELING_MODES)}")
+        app.labeling_mode = mode
+        _write_config(labeling_mode=mode)
+        return jsonify({"labeling_mode": mode})
 
     # ------------------------------------------------------------------
     # Image serving
@@ -366,6 +413,14 @@ def create_app(
             abort(404)
         count = app.db.reset_experiment(experiment_id)
         return jsonify({"reset": count})
+
+    @app.route("/api/experiments/<int:experiment_id>/start_single", methods=["POST"])
+    def start_single(experiment_id: int):
+        if app.db.get_experiment(experiment_id) is None:
+            abort(404)
+        result = app.db.start_single(experiment_id)
+        updated = app.db.get_experiment(experiment_id)
+        return jsonify({**_experiment_dict(updated, include_progress=False), **result})
 
     @app.route("/api/experiments/<int:experiment_id>/start_round_2", methods=["POST"])
     def start_round_2(experiment_id: int):
@@ -689,13 +744,13 @@ def create_app(
 
         Expects multipart/form-data with:
           - file: CSV file (with header row)
-          - pass: "1" or "2"
+          - pass: "1", "2", "voting" or "single"
         """
         pass_num_str = request.form.get("pass", "1")
-        if pass_num_str not in ("1", "2", "voting"):
-            abort(400, description="pass must be '1', '2', or 'voting'")
-        # Convert to int for r1/r2, keep "voting" as string
-        pass_num = "voting" if pass_num_str == "voting" else int(pass_num_str)
+        if pass_num_str not in ("1", "2", "voting", "single"):
+            abort(400, description="pass must be '1', '2', 'voting' or 'single'")
+        # Convert to int for r1/r2, keep the named targets as strings
+        pass_num = pass_num_str if pass_num_str in ("voting", "single") else int(pass_num_str)
 
         uploaded = request.files.get("file")
         if uploaded is None:

@@ -336,6 +336,7 @@ header .spacer { flex: 1; }
 
 /* Stage badges */
 .stage-r1   { color: var(--muted); }
+.stage-single { color: var(--accent); }
 .stage-r2   { color: var(--accent); }
 .stage-corr { color: var(--yellow); }
 .stage-done { color: var(--green); }
@@ -413,6 +414,7 @@ header .spacer { flex: 1; }
         <span id="scan-status"></span>
         <span id="data-root-display" style="font-size:11px;color:var(--muted);font-family:monospace;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
         <button class="btn sm" onclick="showSetPathModal()" id="btn-set-path" title="Change dataset folder">📁 Path</button>
+        <button class="btn sm" onclick="showModeModal()" id="btn-mode" title="Switch labeling workflow">⇄ Mode: Two-Pass</button>
         <button class="btn" id="btn-label-next" onclick="labelNext()">Label Next →</button>
         <button class="btn" onclick="showExportDialog()">Export CSV</button>
         <button class="btn" onclick="showImportDialog()">Import Labels</button>
@@ -430,13 +432,7 @@ header .spacer { flex: 1; }
                oninput="applyDashFilter()"
                style="padding:6px 12px;background:var(--surface2);border:1px solid var(--border);
                       border-radius:6px;color:var(--text);font-size:13px;outline:none;width:220px" />
-        <div style="display:flex;gap:4px" id="stage-filter-btns">
-          <button class="lb-filter-btn active" data-stage="all"        onclick="setDashStageFilter('all')">All</button>
-          <button class="lb-filter-btn"        data-stage="round_1"    onclick="setDashStageFilter('round_1')">Round 1</button>
-          <button class="lb-filter-btn"        data-stage="round_2"    onclick="setDashStageFilter('round_2')">Round 2</button>
-          <button class="lb-filter-btn"        data-stage="correction" onclick="setDashStageFilter('correction')">Correction</button>
-          <button class="lb-filter-btn"        data-stage="done"       onclick="setDashStageFilter('done')">Done</button>
-        </div>
+        <div style="display:flex;gap:4px" id="stage-filter-btns"></div>
         <span id="dash-filter-count" style="font-size:12px;color:var(--muted);margin-left:4px"></span>
       </div>
       <!-- Shown only when no data root has been configured yet -->
@@ -532,6 +528,10 @@ header .spacer { flex: 1; }
 <div id="modal-export" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:380px;width:90%">
     <h3 style="font-size:15px;font-weight:600;margin-bottom:16px">Export CSV</h3>
+    <p id="export-single-note" style="display:none;font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+      Single-pass mode: label_1, label_2 and label_final hold the same value for
+      every single-pass experiment, so all four options give the same labels.
+    </p>
     <div style="margin-bottom:20px;display:flex;flex-direction:column;gap:10px">
       <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
         <input type="radio" name="export-which" value="all" checked style="margin-top:2px">
@@ -562,7 +562,8 @@ header .spacer { flex: 1; }
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:400px;width:90%">
     <h3 style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--red)">Total Reset</h3>
     <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
-      This will erase <strong style="color:var(--text)">all labels</strong> across every experiment and reset all stages to Round 1.
+      This will erase <strong style="color:var(--text)">all labels</strong> across every experiment and reset all two-pass stages to Round 1.
+      Single-pass experiments stay single-pass.
       The <strong style="color:var(--text)">Bug Free</strong> and <strong style="color:var(--text)">Finished</strong> flags will <em>not</em> be reset.
       This cannot be undone.<br><br>
       Type <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;font-family:monospace">yes, i want to reset</code> to confirm.
@@ -590,23 +591,43 @@ header .spacer { flex: 1; }
     </p>
     <div style="margin-bottom:12px">
       <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Import into pass</label>
-      <div style="display:flex;gap:12px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-          <input type="radio" name="import-pass" value="1" checked> Round 1
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-          <input type="radio" name="import-pass" value="2"> Round 2
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-          <input type="radio" name="import-pass" value="voting"> Voting
-        </label>
-      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap" id="import-pass-opts"></div>
     </div>
     <input id="import-file-input" type="file" accept=".csv"
            style="font-size:13px;color:var(--text);margin-bottom:16px;display:block" />
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn sm" onclick="document.getElementById('modal-import').style.display='none'">Cancel</button>
       <button class="btn sm primary" onclick="executeImport()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Labeling Mode Modal ───────────────────────────────────── -->
+<div id="modal-mode" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:460px;width:90%">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:8px">Labeling Mode</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+      Applies to every experiment and is remembered between launches.
+    </p>
+    <div style="margin-bottom:20px;display:flex;flex-direction:column;gap:12px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="mode-choice" value="two_pass" style="margin-top:2px">
+        <div><strong>Two-Pass</strong><br><span style="color:var(--muted);font-size:12px">
+          Round 1, then Round 2, then voting on the frames where the two rounds disagree.
+        </span></div>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px">
+        <input type="radio" name="mode-choice" value="single_pass" style="margin-top:2px">
+        <div><strong>Single Pass</strong><br><span style="color:var(--muted);font-size:12px">
+          One pass and it is final — no Round 2, no voting.  Each label is written to
+          label_1, label_2 and label_final at once, so the exported CSV carries the
+          same value in all three columns.
+        </span></div>
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sm" onclick="document.getElementById('modal-mode').style.display='none'">Cancel</button>
+      <button class="btn sm primary" onclick="applyMode()">Apply</button>
     </div>
   </div>
 </div>
@@ -683,6 +704,16 @@ const LABEL_COLOR = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Labeling mode
+// ─────────────────────────────────────────────────────────────────────────────
+// A global choice, not a per-experiment one: in single-pass mode an experiment
+// gets one final pass with no round 2 and no voting, and every label is written
+// to label_1, label_2 and label_final at once.
+
+let labelingMode = "two_pass";
+const isSinglePass = () => labelingMode === "single_pass";
+
+// ─────────────────────────────────────────────────────────────────────────────
 // API helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -741,6 +772,8 @@ async function loadDashboard() {
   // Try to fetch config (non-fatal if endpoint missing)
   try {
     const cfg = await get("/api/config");
+    if (cfg.labeling_mode) labelingMode = cfg.labeling_mode;
+    updateModeUI();
     const banner = document.getElementById("setup-banner");
     const rootEl = document.getElementById("data-root-display");
     const labelNextBtn = document.getElementById("btn-label-next");
@@ -757,6 +790,7 @@ async function loadDashboard() {
     }
   } catch {
     // /api/config unavailable (old server) — hide banner, proceed normally
+    updateModeUI();
     const banner = document.getElementById("setup-banner");
     if (banner) banner.style.display = "none";
   }
@@ -769,6 +803,52 @@ async function loadDashboard() {
   } catch (e) {
     c.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
   }
+}
+
+// ── Labeling mode ─────────────────────────────────────────────────────────────
+
+function showModeModal() {
+  const radio = document.querySelector(`input[name="mode-choice"][value="${labelingMode}"]`);
+  if (radio) radio.checked = true;
+  document.getElementById("modal-mode").style.display = "flex";
+}
+
+async function applyMode() {
+  const mode = document.querySelector('input[name="mode-choice"]:checked')?.value ?? "two_pass";
+  try {
+    const r = await post("/api/settings/labeling_mode", { mode });
+    labelingMode = r.labeling_mode;
+    document.getElementById("modal-mode").style.display = "none";
+    toast(isSinglePass()
+      ? "Single-pass mode — one final pass per experiment"
+      : "Two-pass mode — Round 1, Round 2, voting");
+    updateModeUI();
+    loadDashboard();
+  } catch (e) { toast("Failed to switch mode: " + e.message); }
+}
+
+function updateModeUI() {
+  const btn = document.getElementById("btn-mode");
+  if (btn) btn.textContent = isSinglePass() ? "⇄ Mode: Single-Pass" : "⇄ Mode: Two-Pass";
+  renderStageFilterBtns();
+}
+
+// The dashboard filter bar follows the mode: single-pass experiments never
+// leave the `single` stage, so there they are filtered by progress instead.
+const STAGE_FILTERS = {
+  two_pass: [["all", "All"], ["round_1", "Round 1"], ["round_2", "Round 2"],
+             ["correction", "Correction"], ["done", "Done"]],
+  single_pass: [["all", "All"], ["open", "In Progress"], ["finished", "Done"]],
+};
+
+function renderStageFilterBtns() {
+  const wrap = document.getElementById("stage-filter-btns");
+  if (!wrap) return;
+  const opts = STAGE_FILTERS[isSinglePass() ? "single_pass" : "two_pass"];
+  if (!opts.some(([v]) => v === dashStageFilter)) dashStageFilter = "all";
+  wrap.innerHTML = opts.map(([v, label]) =>
+    `<button class="lb-filter-btn ${v === dashStageFilter ? "active" : ""}" data-stage="${v}"
+             onclick="setDashStageFilter('${v}')">${label}</button>`).join("");
 }
 
 // ── Path configuration ────────────────────────────────────────────────────────
@@ -823,6 +903,7 @@ function stageBadge(stage) {
     round_2:    '<span class="stage-r2">Round 2</span>',
     correction: '<span class="stage-corr">Correction</span>',
     done:       '<span class="stage-done">Done</span>',
+    single:     '<span class="stage-single">Single Pass</span>',
   };
   return map[stage] ?? '<span class="stage-r1">Round 1</span>';
 }
@@ -846,10 +927,26 @@ function setDashStageFilter(stage) {
   applyDashFilter();
 }
 
+// Progress of an experiment treated as a single final pass.
+function singlePassProgress(exp) {
+  const p   = exp.progress ?? {};
+  const pct = p.pct ?? 0;
+  return { pct, done: pct >= 100 && (p.total ?? 0) > 0 };
+}
+
+function dashMatchesStage(exp) {
+  if (dashStageFilter === "all") return true;
+  if (isSinglePass()) {
+    const { done } = singlePassProgress(exp);
+    return dashStageFilter === "finished" ? done : !done;
+  }
+  return exp.labeling_stage === dashStageFilter;
+}
+
 function applyDashFilter() {
   const q = (document.getElementById("dash-search")?.value ?? "").toLowerCase().trim();
   const filtered = allExperiments.filter(exp => {
-    if (dashStageFilter !== "all" && exp.labeling_stage !== dashStageFilter) return false;
+    if (!dashMatchesStage(exp)) return false;
     if (q) {
       const haystack = ((exp.name || "") + " " + (exp.hash || "") + " " +
                         exp.P + " " + exp.VX + " " + exp.LS + " " + exp.ST).toLowerCase();
@@ -865,13 +962,49 @@ function applyDashFilter() {
   renderDashboard(filtered);
 }
 
+// The cells both modes share: identity, physics parameters and the two flags.
+function expBaseCells(exp) {
+  return `<td>
+        <span class="param" style="font-size:11px">${exp.name || ''}</span>
+        ${exp.hash ? `<br><span style="font-size:10px;color:var(--muted);font-family:monospace">#${exp.hash}</span>` : ''}
+      </td>
+      <td><span class="param">${exp.P}</span></td>
+      <td><span class="param">${exp.VX}</span></td>
+      <td><span class="param">${exp.LS}</span></td>
+      <td><span class="param">${exp.ST}</span></td>
+      <td>${boolBadge(exp.bug_free)}</td>
+      <td>${boolBadge(exp.correctly_finished)}</td>`;
+}
+
+// Single-pass row: one progress bar and one button — there is no second round
+// to unlock and nothing to vote on.
+function singlePassRow(exp) {
+  const stage = exp.labeling_stage ?? 'round_1';
+  const { pct, done } = singlePassProgress(exp);
+  return `<tr>
+      ${expBaseCells(exp)}
+      <td style="min-width:160px">${miniBar(pct, done ? 'var(--green)' : 'var(--accent)')}</td>
+      <td><div class="actions">
+        <button class="btn sm ${stage === 'single' && !done ? 'primary' : ''}"
+                onclick="openSingle(${exp.id})"
+                title="${done ? 'Edit the final labels' : 'Label this experiment — one final pass'}">
+          ${done ? 'Edit' : 'Label'}</button>
+        ${done ? `<button class="btn sm primary" onclick="openReview(${exp.id})" title="Review final labels">Review</button>` : ''}
+        <button class="btn sm" onclick="openComparison(${exp.id})" title="Compare Conduction vs Keyhole morphs">⊡ Cmp</button>
+        <button class="btn sm" onclick="resetExperiment(${exp.id})" title="Full reset" style="color:var(--muted)">↺</button>
+      </div></td>
+    </tr>`;
+}
+
 function renderDashboard(exps) {
   const c = document.getElementById("exp-container");
   if (!exps.length) {
     c.innerHTML = '<div class="empty-state"><p>No experiments match the current filter.</p></div>';
     return;
   }
+  const single = isSinglePass();
   const rows = exps.map(exp => {
+    if (single) return singlePassRow(exp);
     const p = exp.progress;
     const stage = exp.labeling_stage ?? 'round_1';
     const r1 = p.pass1_pct ?? 0;
@@ -894,16 +1027,7 @@ function renderDashboard(exps) {
     }
 
     return `<tr>
-      <td>
-        <span class="param" style="font-size:11px">${exp.name || ''}</span>
-        ${exp.hash ? `<br><span style="font-size:10px;color:var(--muted);font-family:monospace">#${exp.hash}</span>` : ''}
-      </td>
-      <td><span class="param">${exp.P}</span></td>
-      <td><span class="param">${exp.VX}</span></td>
-      <td><span class="param">${exp.LS}</span></td>
-      <td><span class="param">${exp.ST}</span></td>
-      <td>${boolBadge(exp.bug_free)}</td>
-      <td>${boolBadge(exp.correctly_finished)}</td>
+      ${expBaseCells(exp)}
       <td style="min-width:110px">${miniBar(r1, 'var(--accent)')}</td>
       <td style="min-width:110px">${miniBar(r2, 'var(--green)')}</td>
       <td style="text-align:center">${agreeCell}</td>
@@ -923,13 +1047,16 @@ function renderDashboard(exps) {
       </div></td>
     </tr>`;
   }).join("");
+  const passCols = single
+    ? '<th style="min-width:160px">Progress</th>'
+    : `<th style="min-width:120px">Round 1</th>
+       <th style="min-width:120px">Round 2</th>
+       <th>Agreement</th>`;
   c.innerHTML = `<table class="exp-table">
     <thead><tr>
       <th>Name</th><th>P</th><th>VX</th><th>LS</th><th>ST</th>
       <th>Bug Free</th><th>Finished</th>
-      <th style="min-width:120px">Round 1</th>
-      <th style="min-width:120px">Round 2</th>
-      <th>Agreement</th>
+      ${passCols}
       <th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -962,6 +1089,27 @@ async function openRound(expId, roundNum) {
   } catch(e) { toast("Failed to open: " + e.message); }
 }
 
+// Open an experiment for its one and only pass.  The stage switch is what
+// makes the server write all three label columns on every change.
+async function openSingle(expId) {
+  await lbFlushPending();          // queued labels belong to the stage they were typed in
+  const exp   = allExperiments.find(e => e.id === expId);
+  const stage = exp?.labeling_stage ?? 'round_1';
+  try {
+    if (stage !== 'single') {
+      const p = exp?.progress ?? {};
+      const hasTwoPassWork = (p.pass2_pct ?? 0) > 0 || stage === 'correction' || stage === 'done';
+      if (hasTwoPassWork && !confirm(
+        "This experiment already has two-pass work.\n\n" +
+        "Switching it to single pass collapses Round 1, Round 2 and any voting " +
+        "result into one final label per frame (the resolved label wins, then " +
+        "Round 1, then Round 2).\n\nContinue?")) return;
+      await post(`/api/experiments/${expId}/start_single`);
+    }
+    await openMode(expId, false);
+  } catch (e) { toast("Failed to open: " + e.message); }
+}
+
 async function openVoting(expId) {
   await lbFlushPending();          // check_agreement must see every label
   const exp = allExperiments.find(e => e.id === expId);
@@ -982,6 +1130,12 @@ async function openVoting(expId) {
 }
 
 function labelNext() {
+  if (isSinglePass()) {
+    const next = allExperiments.find(e => !singlePassProgress(e).done && e.progress.total > 0);
+    if (next) openSingle(next.id);
+    else toast("All experiments fully labeled!");
+    return;
+  }
   // Prefer experiments that still need round 1
   const needsR1 = allExperiments.find(e => (e.progress.pass1_pct ?? 0) < 100 && e.progress.total > 0);
   if (needsR1) { openRound(needsR1.id, 1); return; }
@@ -1217,6 +1371,17 @@ async function lbAfterSaveSettled() {
   }
 
   if (stage === "done") { autoAssignFlags(); return; }
+
+  // Single pass: the first pass is the last one, so finishing it finishes the
+  // experiment — there is no round 2 to offer and nothing to vote on.
+  if (stage === "single") {
+    if (lb.roundCompleteShown) return;
+    if (nonMissing.some(f => f.label === "Unlabeled")) return;
+    lb.roundCompleteShown = true;
+    await autoAssignFlags();
+    showSinglePassComplete();
+    return;
+  }
 
   if (!lb.roundCompleteShown && (stage === "round_1" || stage === "round_2")) {
     const unlabeled = nonMissing.filter(f => f.label === "Unlabeled").length;
@@ -1513,6 +1678,7 @@ function updateExpInfoHeader() {
     round_2:    '<span style="color:var(--accent);font-size:11px">[Round 2]</span>',
     correction: '<span style="color:var(--yellow);font-size:11px">[Correction]</span>',
     done:       '<span style="color:var(--green);font-size:11px">[Done]</span>',
+    single:     '<span style="color:var(--accent);font-size:11px">[Single Pass]</span>',
   }[e.labeling_stage] ?? '';
   document.getElementById("lb-exp-info").innerHTML =
     `<span class="param">P&nbsp;${e.P}</span>&nbsp;
@@ -1820,7 +1986,10 @@ function lbSetLabel(label) {
   // truthful for the progress and end-of-round checks.
   const stage = lb.exp?.labeling_stage;
   const patch = { label };
-  if      (stage === "round_1") patch.label_1 = label;
+  if (stage === "single") {
+    patch.label_1 = patch.label_2 = patch.label_final = label;
+  }
+  else if (stage === "round_1") patch.label_1 = label;
   else if (stage === "round_2") patch.label_2 = label;
   else if (stage === "correction" || stage === "done") patch.label_final = label;
   lb.frames[idx] = { ...f, ...patch };
@@ -1939,7 +2108,8 @@ function updateStageBtns() {
 
   // Label the reset button with which pass it's resetting
   if (!lb.readOnly) {
-    if (stage === "round_1") rstBtn.textContent = "Reset R1";
+    if (stage === "single") rstBtn.textContent = "Reset Labels";
+    else if (stage === "round_1") rstBtn.textContent = "Reset R1";
     else if (stage === "round_2") rstBtn.textContent = "Reset R2";
     else rstBtn.textContent = "Reset Pass";
   }
@@ -1959,6 +2129,22 @@ async function autoAssignFlags() {
     lb.exp = updated;
     updateBoolButtons();
   } catch {}
+}
+
+// Single-pass completion — reuses the round-done modal, but the only thing
+// left to do is move on to the next experiment.
+function showSinglePassComplete() {
+  document.getElementById('round-done-title').textContent = 'Experiment Complete!';
+  document.getElementById('round-done-msg').textContent   =
+    'All frames are labeled. This was the final pass — label_1, label_2 and ' +
+    'label_final all carry these labels.';
+  const actionBtn = document.getElementById('round-done-action');
+  actionBtn.textContent = 'Next Experiment';
+  actionBtn.onclick = () => {
+    document.getElementById('modal-round-done').style.display = 'none';
+    lbNextExperiment();
+  };
+  document.getElementById('modal-round-done').style.display = 'flex';
 }
 
 async function showRoundCompleteOptions(stage) {
@@ -2049,8 +2235,9 @@ async function checkAgreement() {
 
 async function lbNextExperiment() {
   const stage   = lb.exp?.labeling_stage ?? 'round_1';
+  const single  = stage === 'single';
   const passNum = stage === 'round_2' ? 2 : 1;
-  const pctKey  = passNum === 2 ? 'pass2_pct' : 'pass1_pct';
+  const pctKey  = single ? 'pct' : (passNum === 2 ? 'pass2_pct' : 'pass1_pct');
   const curId   = lb.expId;
 
   // Reload dashboard data silently so we have fresh pct values
@@ -2066,10 +2253,12 @@ async function lbNextExperiment() {
   ];
   const next = pool.find(e => (e.progress[pctKey] ?? 0) < 100 && e.progress.total > 0);
   if (!next) {
-    toast(`No more experiments to label in Round ${passNum}!`);
+    toast(single ? "No more experiments to label!"
+                 : `No more experiments to label in Round ${passNum}!`);
     return;
   }
-  await openRound(next.id, passNum);
+  if (single) await openSingle(next.id);
+  else        await openRound(next.id, passNum);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2212,6 +2401,8 @@ async function executeTotalReset() {
 }
 
 function showExportDialog() {
+  const note = document.getElementById("export-single-note");
+  if (note) note.style.display = isSinglePass() ? "block" : "none";
   document.getElementById("modal-export").style.display = "flex";
 }
 
@@ -2227,8 +2418,19 @@ function executeExport() {
   document.body.removeChild(a);
 }
 
+// Which label columns an import can target — a single pass writes all three.
+const IMPORT_PASSES = {
+  two_pass:    [["1", "Round 1"], ["2", "Round 2"], ["voting", "Voting"]],
+  single_pass: [["single", "Single Pass"]],
+};
+
 function showImportDialog() {
   document.getElementById("import-file-input").value = "";
+  const opts = IMPORT_PASSES[isSinglePass() ? "single_pass" : "two_pass"];
+  document.getElementById("import-pass-opts").innerHTML = opts.map(([v, label], i) =>
+    `<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+       <input type="radio" name="import-pass" value="${v}" ${i === 0 ? "checked" : ""}> ${label}
+     </label>`).join("");
   document.getElementById("modal-import").style.display = "flex";
 }
 
@@ -2246,7 +2448,9 @@ async function executeImport() {
     const r = await fetch("/api/import", { method: "POST", body: fd });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    const passName = passVal === "voting" ? "Voting" : `Round ${passVal}`;
+    const passName = passVal === "voting" ? "Voting"
+                   : passVal === "single" ? "the single pass"
+                   : `Round ${passVal}`;
     toast(`Imported ${j.updated} labels (${j.skipped} skipped) into ${passName}`);
     loadDashboard();
   } catch(e) { toast("Import failed: " + e.message); }
@@ -2278,9 +2482,13 @@ function cycleBool(field) {
 async function resetCurrentExperiment() {
   if (lb.readOnly || !lb.expId) return;
   const stage   = lb.exp?.labeling_stage ?? 'round_1';
+  const single  = stage === 'single';
+  // A single-pass experiment has one pass, so the server clears every column
+  // whichever pass number it is asked for.
   const passNum = stage === 'round_2' ? 2 : 1;
-  const passLabel = stage === 'round_2' ? 'Round 2' : 'Round 1';
-  if (!confirm(`Reset all ${passLabel} labels to Unlabeled? This cannot be undone.`)) return;
+  const passLabel = single ? 'labels in this experiment'
+                  : stage === 'round_2' ? 'Round 2 labels' : 'Round 1 labels';
+  if (!confirm(`Reset all ${passLabel} to Unlabeled? This cannot be undone.`)) return;
   lb.pending.clear();              // these are about to be wiped anyway
   try {
     const r = await post(`/api/experiments/${lb.expId}/reset/${passNum}`);
@@ -2292,7 +2500,7 @@ async function resetCurrentExperiment() {
     lbSetFrames(frames);
     lb.idx    = 0;
     lbRenderAll();
-    toast(`Reset ${r.reset} ${passLabel} frames to Unlabeled`);
+    toast(`Reset ${r.reset} frames to Unlabeled`);
   } catch (e) { toast("Reset failed: " + e.message); }
 }
 
@@ -2373,13 +2581,13 @@ window.addEventListener("beforeunload", () => {
 });
 
 // Close modals on backdrop click or Escape
-["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done"].forEach(id => {
+["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done", "modal-mode"].forEach(id => {
   const el = document.getElementById(id);
   el.addEventListener("click", e => { if (e.target === el) el.style.display = "none"; });
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    ["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done"]
+    ["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done", "modal-mode"]
       .forEach(id => { document.getElementById(id).style.display = "none"; });
   }
 }, true);
