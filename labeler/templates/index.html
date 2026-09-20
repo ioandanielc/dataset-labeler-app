@@ -1927,7 +1927,7 @@ function lbRenderLegend() {
     `<div id="lb-legend-spacer"></div>
      <div id="lb-nav-hint">
        <span class="kb">←</span><span class="kb">→</span>&nbsp;navigate&nbsp;
-       <span class="kb">n</span>&nbsp;next exp&nbsp;
+       <span class="kb">n</span><span class="kb">⏎</span>&nbsp;next exp&nbsp;
        ${lb.readOnly ? "" : '<span class="kb">Ctrl+Z</span>&nbsp;undo&nbsp;<span class="kb">⇧1–9</span>&nbsp;fill to end&nbsp;<span class="kb">b</span>&nbsp;bug&nbsp;<span class="kb">f</span>&nbsp;finished'}
      </div>
      <button class="btn xs ${lb.aggOpen ? "active" : ""}" id="btn-agg-toggle" onclick="toggleAgg()">By Label</button>`;
@@ -2508,6 +2508,14 @@ async function resetCurrentExperiment() {
 // Keyboard
 // ─────────────────────────────────────────────────────────────────────────────
 
+const MODAL_IDS = ["modal-export", "modal-total-reset", "modal-import", "modal-set-path",
+                   "modal-exp-done", "modal-round-done", "modal-mode"];
+
+// Modals are shown by setting display to "flex" and hidden with "none".
+function anyModalOpen() {
+  return MODAL_IDS.some(id => document.getElementById(id)?.style.display === "flex");
+}
+
 // Read the digit from the physical key, so Shift+3 ("#" on many layouts) still
 // resolves to 3.
 function lbDigitFromEvent(e) {
@@ -2529,7 +2537,13 @@ document.addEventListener("keydown", e => {
     lbNav(e.key === "ArrowRight" ? +1 : -1);
     return;
   }
-  if (e.key === "n") { e.preventDefault(); if (!e.repeat) lbNextExperiment(); return; }
+  // Enter is the same as n — the quickest way on to the next run once this
+  // one is labeled.  Both are ignored while a dialog owns the keyboard.
+  if (e.key === "n" || e.key === "Enter") {
+    e.preventDefault();
+    if (!e.repeat && !anyModalOpen()) lbNextExperiment();
+    return;
+  }
   if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey)) {
     e.preventDefault(); lbUndo(); return;      // lbUndo drops repeats while busy
   }
@@ -2581,13 +2595,13 @@ window.addEventListener("beforeunload", () => {
 });
 
 // Close modals on backdrop click or Escape
-["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done", "modal-mode"].forEach(id => {
+MODAL_IDS.forEach(id => {
   const el = document.getElementById(id);
   el.addEventListener("click", e => { if (e.target === el) el.style.display = "none"; });
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    ["modal-export", "modal-total-reset", "modal-import", "modal-set-path", "modal-exp-done", "modal-round-done", "modal-mode"]
+    MODAL_IDS
       .forEach(id => { document.getElementById(id).style.display = "none"; });
   }
 }, true);

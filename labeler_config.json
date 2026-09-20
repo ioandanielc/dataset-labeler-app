@@ -1,3 +1,4 @@
 {
-  "root": "/Users/ioandanielcraciun/Documents/dataset/raw/new_data_4"
+  "root": "/Users/ioandanielcraciun/Documents/dataset/raw/new_data_4",
+  "labeling_mode": "single_pass"
 }
