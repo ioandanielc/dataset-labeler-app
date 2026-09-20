@@ -102,10 +102,29 @@ When you open an experiment, you see:
 | `7` | Keyhole |
 | `8` | Scanning Stopped |
 | `9` | Solidifying Stopped |
-| `Ctrl+Z` | Undo last label |
+| `Shift` + `1`…`9` | Label this frame **and every frame after it** (see below) |
+| `Ctrl+Z` | Undo last label (or the whole fill) |
 | `b` | Toggle Bug Free flag |
 | `f` | Toggle Correctly Finished flag |
 | `n` | Jump to next experiment |
+
+Holding a label key down keeps labeling frame after frame — useful for long
+runs of the same phase.
+
+### Labeling the rest of a run in one go
+
+Near the end of a run everything that follows is usually the same phase —
+typically **Solidifying Stopped**. Instead of pressing the key hundreds of
+times:
+
+- Press **Shift + the label's number** (e.g. `Shift+9` for Solidifying
+  Stopped), **or**
+- Click the small **⇥** button on that label in the bottom legend.
+
+This labels the current frame and *every later timestep* with that label.
+You are asked to confirm first, and told how many frames already carry a
+different label. Frames missing on disk are skipped. **Ctrl+Z** undoes the
+whole fill in one step.
 
 ### Filters (right sidebar top)
 

@@ -11,6 +11,8 @@ GET  /api/experiments/<id>/frames             — all frames for one experiment
 PATCH /api/experiments/<id>                   — update bug_free / correctly_finished
 GET  /api/frames/<experiment_id>/<timestep>   — single frame (with suggestion)
 PATCH /api/frames/<experiment_id>/<timestep>  — set label
+PATCH /api/frames/<experiment_id>/bulk        — set many labels in one request
+POST /api/experiments/<id>/fill_from          — label a timestep and all later ones
 POST /api/undo                                — undo last label change
 POST /api/scan                                — trigger diff re-scan
 GET  /api/progress                            — global progress summary
@@ -320,7 +322,9 @@ def create_app(
         img_path = Path(exp["folder"]) / "png_files" / f"ss_{timestep}_side.png"
         if not img_path.is_file():
             abort(404)
-        return send_file(str(img_path), mimetype="image/png")
+        # Cached client-side so scrubbing back and forth (or holding an arrow
+        # key) does not re-request the same PNG over and over.
+        return send_file(str(img_path), mimetype="image/png", max_age=3600)
 
     # ------------------------------------------------------------------
     # Experiments
@@ -430,35 +434,108 @@ def create_app(
             d["suggestion"] = app.suggester.suggest(experiment_id, timestep, context)
         return jsonify(d)
 
+    def _queue_composites(experiment_id: int, labels) -> None:
+        """Queue affected labels for background morph recompute (if enabled)."""
+        if not app.bg_compute_enabled:
+            return
+        with app._bg_cond:
+            for lbl in labels:
+                if lbl and lbl != "Unlabeled":
+                    key = (experiment_id, lbl)
+                    if key not in app._bg_queue_set:
+                        app._bg_queue.append(key)
+                        app._bg_queue_set.add(key)
+            app._bg_cond.notify()
+
     @app.route("/api/frames/<int:experiment_id>/<int:timestep>", methods=["PATCH"])
     def set_frame_label(experiment_id: int, timestep: int):
         body = request.get_json(silent=True) or {}
         label = body.get("label")
         if label not in LABELS:
             abort(400, description=f"Invalid label. Must be one of: {LABELS}")
-        # Capture old label before update for composite invalidation
-        frames_before = app.db.get_frames(experiment_id)
-        frame_before = next((f for f in frames_before if f["timestep"] == timestep), None)
-        old_label = frame_before["label"] if frame_before else None
 
-        ok = app.db.set_label(experiment_id, timestep, label)
-        if not ok:
+        result = app.db.set_labels(experiment_id, [(timestep, label)])
+        if result is None or not result["matched"]:
             abort(404)
 
-        # Queue affected labels for background recompute (if enabled)
-        if app.bg_compute_enabled:
-            with app._bg_cond:
-                for lbl in {old_label, label}:
-                    if lbl and lbl != "Unlabeled":
-                        key = (experiment_id, lbl)
-                        if key not in app._bg_queue_set:
-                            app._bg_queue.append(key)
-                            app._bg_queue_set.add(key)
-                app._bg_cond.notify()
+        affected = {label} | {old for _ts, old, _new in result["changed"]}
+        _queue_composites(experiment_id, affected)
 
-        frames = app.db.get_frames(experiment_id)
-        frame = next(f for f in frames if f["timestep"] == timestep)
+        frame = app.db.get_frame(experiment_id, timestep)
         return jsonify(_frame_dict(frame))
+
+    @app.route("/api/frames/<int:experiment_id>/bulk", methods=["PATCH"])
+    def set_frame_labels_bulk(experiment_id: int):
+        """Apply several label changes at once.
+
+        The frontend batches key presses here so that holding a label key down
+        costs one request per batch instead of one per frame.  Each frame is
+        still its own undo step.
+
+        Body: ``{"changes": [{"timestep": int, "label": str}, ...]}``
+        """
+        body    = request.get_json(silent=True) or {}
+        changes = body.get("changes") or []
+        if not isinstance(changes, list):
+            abort(400, description="changes must be a list")
+
+        pairs = []
+        for c in changes:
+            label = (c or {}).get("label")
+            if label not in LABELS:
+                abort(400, description=f"Invalid label. Must be one of: {LABELS}")
+            try:
+                pairs.append((int(c["timestep"]), label))
+            except (KeyError, TypeError, ValueError):
+                abort(400, description="each change needs an integer timestep")
+
+        result = app.db.set_labels(experiment_id, pairs)
+        if result is None:
+            abort(404)
+
+        affected = {lbl for _ts, lbl in pairs} | {old for _ts, old, _new in result["changed"]}
+        _queue_composites(experiment_id, affected)
+
+        frames = {f["timestep"]: f for f in app.db.get_frames(experiment_id)}
+        return jsonify({
+            "updated": len(result["changed"]),
+            "frames":  [_frame_dict(frames[ts]) for ts in result["matched"] if ts in frames],
+        })
+
+    @app.route("/api/experiments/<int:experiment_id>/fill_from", methods=["POST"])
+    def fill_from_timestep(experiment_id: int):
+        """Label *timestep* and every later frame of the experiment with *label*.
+
+        Body: ``{"timestep": int, "label": str}``.  Frames missing on disk are
+        skipped.  The whole fill is one undo step.
+        """
+        exp = app.db.get_experiment(experiment_id)
+        if exp is None:
+            abort(404)
+        body  = request.get_json(silent=True) or {}
+        label = body.get("label")
+        if label not in LABELS:
+            abort(400, description=f"Invalid label. Must be one of: {LABELS}")
+        try:
+            start = int(body["timestep"])
+        except (KeyError, TypeError, ValueError):
+            abort(400, description="timestep is required and must be an integer")
+
+        result = app.db.fill_label_from(experiment_id, start, label)
+        if result is None:
+            abort(404)
+
+        affected = {label} | {old for _ts, old, _new in result["changed"]}
+        _queue_composites(experiment_id, affected)
+
+        updated_exp = app.db.get_experiment(experiment_id)
+        return jsonify({
+            "updated":       len(result["changed"]),
+            "matched":       len(result["matched"]),
+            "stage_changed": result["stage_changed"],
+            "experiment":    _experiment_dict(updated_exp, include_progress=False),
+            "frames":        [_frame_dict(f) for f in app.db.get_frames(experiment_id)],
+        })
 
     # ------------------------------------------------------------------
     # Composites

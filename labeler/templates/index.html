@@ -359,6 +359,13 @@ header .spacer { flex: 1; }
 .lb-legend-item.current-label { border-color: var(--border); background: var(--surface2); color: var(--text); }
 .lb-legend-key { font-size: 11px; font-weight: 700; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-family: monospace; color: var(--text); }
 .lb-legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+.lb-fill-btn {
+  margin-left: 4px; padding: 1px 5px; font-size: 11px; line-height: 1.3;
+  background: transparent; border: 1px solid transparent; border-radius: 3px;
+  color: var(--muted); cursor: pointer; opacity: .4; transition: opacity .12s;
+}
+.lb-legend-item:hover .lb-fill-btn { opacity: 1; }
+.lb-fill-btn:hover { background: var(--surface2); border-color: var(--border); color: var(--text); }
 #lb-nav-hint { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .kb { font-size: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; font-family: monospace; color: var(--muted); }
 #lb-legend-spacer { flex: 1; }
@@ -939,6 +946,9 @@ async function resetExperiment(expId) {
 }
 
 async function openRound(expId, roundNum) {
+  // Save queued labels first: switching the stage changes which column they
+  // would be written to.
+  await lbFlushPending();
   // Switch to the correct pass on the server before opening the view
   const exp = allExperiments.find(e => e.id === expId);
   const stage = exp?.labeling_stage ?? 'round_1';
@@ -953,6 +963,7 @@ async function openRound(expId, roundNum) {
 }
 
 async function openVoting(expId) {
+  await lbFlushPending();          // check_agreement must see every label
   const exp = allExperiments.find(e => e.id === expId);
   const stage = exp?.labeling_stage ?? 'round_1';
   try {
@@ -1014,16 +1025,218 @@ const lb = {
   aggOpen:   false,
   openGroups: new Set(),
   roundCompleteShown: false,
+
+  // ── Labeling hot path ─────────────────────────────────────────────────────
+  // Holding a label key down must stay smooth, so the view keeps its own
+  // indexes and DOM handles instead of rebuilding everything per key press.
+  idxByTs:   new Map(),   // timestep → index into lb.frames
+  tlNodes:   new Map(),   // timestep → timeline segment element
+  sideNodes: new Map(),   // timestep → sidebar row element
+  pending:   new Map(),   // "expId:ts" → {expId, timestep, label} not yet saved
+  flushTimer:  null,
+  flushing:    false,
+  failedSaves: 0,
+  settleTimer: null,
+  undoing:     false,
+  lastLabelAt: 0,
+  lastNavAt:   0,
+  navDir:      1,         // which way the user is moving, for image prefetch
 };
+
+// Collect key presses for this long before sending them as one request.
+const LB_FLUSH_MS  = 120;
+// Floor between two label/nav actions while a key is held (~22 per second).
+const LB_REPEAT_MS = 45;
+// How many frames ahead to prefetch images for.
+const LB_PRELOAD   = 8;
 
 // ── Filtered frame set ────────────────────────────────────────────────────────
 
-function filteredFrames() {
+function lbMatchesFilter(f) {
   if (lb.filter === "unlabeled")
-    return lb.frames.filter(f => f.label === "Unlabeled" && !f.missing);
+    return f.label === "Unlabeled" && !f.missing;
   if (lb.filter === "conflicts")
-    return lb.frames.filter(f => f.label_1 !== f.label_2 && f.label_final == null && !f.missing);
-  return lb.frames;
+    return f.label_1 !== f.label_2 && f.label_final == null && !f.missing;
+  return true;
+}
+
+function filteredFrames() {
+  return lb.filter === "all" ? lb.frames : lb.frames.filter(lbMatchesFilter);
+}
+
+// ── Frame index ───────────────────────────────────────────────────────────────
+// Frames are looked up by timestep on every key press; a map keeps that O(1)
+// instead of scanning an array of thousands of frames each time.
+
+function lbSetFrames(frames) {
+  lb.frames   = frames;
+  lb.idxByTs  = new Map(frames.map((f, i) => [f.timestep, i]));
+}
+
+function lbIdxOf(ts) {
+  const i = lb.idxByTs.get(ts);
+  return i === undefined ? -1 : i;
+}
+
+// ── Image prefetch ────────────────────────────────────────────────────────────
+// Stepping through frames faster than the browser fetches PNGs is what makes
+// the viewer look stalled, so fetch the ones about to be shown up front.
+
+const lbImgCache = new Map();   // url → Image
+
+function lbPreload(idx) {
+  for (let d = 1; d <= LB_PRELOAD; d++) {
+    const f = lb.frames[idx + d * lb.navDir];
+    if (!f || f.missing) continue;
+    const url = `/images/${lb.expId}/${f.timestep}`;
+    if (lbImgCache.has(url)) continue;
+    const im = new Image();
+    im.decoding = "async";
+    im.src = url;
+    lbImgCache.set(url, im);
+  }
+  if (lbImgCache.size > 600)
+    [...lbImgCache.keys()].slice(0, 300).forEach(k => lbImgCache.delete(k));
+}
+
+// ── Batched saving ────────────────────────────────────────────────────────────
+// Label changes are applied locally first and sent in batches, with only one
+// request in flight at a time — a held key must never queue up one round trip
+// per repeat.
+
+function lbQueueSave(ts, label) {
+  lb.pending.set(`${lb.expId}:${ts}`, { expId: lb.expId, timestep: ts, label });
+  if (!lb.flushTimer && !lb.flushing)
+    lb.flushTimer = setTimeout(lbFlushSaves, LB_FLUSH_MS);
+}
+
+async function lbFlushSaves() {
+  if (lb.flushTimer) { clearTimeout(lb.flushTimer); lb.flushTimer = null; }
+  if (lb.flushing || lb.pending.size === 0) return;
+
+  const batch = [...lb.pending.values()];
+  lb.pending.clear();
+  lb.flushing = true;
+
+  // Grouped by experiment so a batch queued just before switching experiments
+  // still lands on the right one.
+  const byExp = new Map();
+  batch.forEach(c => {
+    if (!byExp.has(c.expId)) byExp.set(c.expId, []);
+    byExp.get(c.expId).push({ timestep: c.timestep, label: c.label });
+  });
+
+  try {
+    for (const [expId, changes] of byExp) {
+      const res = await api("PATCH", `/api/frames/${expId}/bulk`, { changes });
+      if (expId !== lb.expId) continue;          // user already moved on
+      (res.frames || []).forEach(fr => {
+        const i = lbIdxOf(fr.timestep);
+        if (i >= 0) lb.frames[i] = fr;
+      });
+    }
+    lb.failedSaves = 0;
+  } catch (e) {
+    lb.failedSaves++;
+    // Re-queue this batch ahead of anything added since.
+    const retry = new Map(batch.map(c => [`${c.expId}:${c.timestep}`, c]));
+    lb.pending.forEach((v, k) => retry.set(k, v));
+    lb.pending = retry;
+    if (lb.failedSaves >= 3) {
+      lb.pending.clear();
+      lb.failedSaves = 0;
+      lb.flushing = false;
+      toast("Save failed — reloading labels from the server");
+      await lbReloadFrames();
+      return;
+    }
+    toast("Save failed — retrying…");
+    lb.flushTimer = setTimeout(lbFlushSaves, 1000);
+  } finally {
+    lb.flushing = false;
+  }
+
+  if (lb.pending.size && !lb.flushTimer)
+    lb.flushTimer = setTimeout(lbFlushSaves, LB_FLUSH_MS);
+  else if (!lb.pending.size)
+    lbScheduleSettle();
+}
+
+// Wait until everything queued has actually been written — used before undo,
+// bulk fills and leaving the view.
+async function lbFlushPending() {
+  for (let i = 0; i < 60 && (lb.flushing || lb.pending.size); i++) {
+    if (lb.flushing) await new Promise(r => setTimeout(r, 25));
+    else await lbFlushSaves();
+    if (lb.failedSaves > 0) break;   // a retry is already scheduled
+  }
+}
+
+async function lbReloadFrames() {
+  if (!lb.expId) return;
+  try {
+    const [exp, frames] = await Promise.all([
+      get(`/api/experiments/${lb.expId}`),
+      get(`/api/experiments/${lb.expId}/frames`),
+    ]);
+    lb.exp = exp;
+    lbSetFrames(frames);
+    if (lb.idx >= lb.frames.length) lb.idx = Math.max(0, lb.frames.length - 1);
+    lbRenderAll();
+    updateExpInfoHeader();
+  } catch {}
+}
+
+// Work too expensive to redo on every key press — the by-label panel and the
+// end-of-round checks — runs once the save queue has drained.
+function lbScheduleSettle() {
+  clearTimeout(lb.settleTimer);
+  lb.settleTimer = setTimeout(lbAfterSaveSettled, 200);
+}
+
+async function lbAfterSaveSettled() {
+  if (!lb.expId || lb.readOnly) return;
+  updateStageBtns();
+  if (lb.aggOpen) renderAggPanel();
+
+  const stage      = lb.exp?.labeling_stage;
+  const nonMissing = lb.frames.filter(f => !f.missing);
+  if (!nonMissing.length) return;
+
+  if (stage === "correction") {
+    const remaining = nonMissing.filter(
+      f => f.label_1 !== f.label_2 && f.label_final == null).length;
+    if (remaining > 0) return;
+    try {
+      lb.exp = await get(`/api/experiments/${lb.expId}`);
+      if (lb.exp.labeling_stage === "done")
+        lbApplyDoneStage("All Conflicts Resolved!",
+          "Every conflict has been resolved. The experiment is now finalised.");
+    } catch {}
+    return;
+  }
+
+  if (stage === "done") { autoAssignFlags(); return; }
+
+  if (!lb.roundCompleteShown && (stage === "round_1" || stage === "round_2")) {
+    const unlabeled = nonMissing.filter(f => f.label === "Unlabeled").length;
+    if (unlabeled === 0) {
+      lb.roundCompleteShown = true;
+      showRoundCompleteOptions(stage);
+    }
+  }
+}
+
+// Shared by the correction-complete check and by a fill that resolves the last
+// conflicts.
+function lbApplyDoneStage(title, msg) {
+  lb.filter = "all";
+  const conflictBtn = document.getElementById("filter-conflicts");
+  if (conflictBtn) conflictBtn.style.display = "none";
+  updateExpInfoHeader();
+  autoAssignFlags();
+  lbRenderAll();
+  showExpDoneModal(title, msg);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1034,12 +1247,18 @@ async function openLabel(expId)  { await openMode(expId, false); }
 async function openReview(expId) { await openMode(expId, true); }
 
 async function openMode(expId, readOnly) {
+  await lbFlushPending();          // don't carry unsaved labels into the next experiment
   lb.expId    = expId;
   lb.readOnly = readOnly;
   lb.filter      = "all";
   lb.aggOpen     = false;
   lb.openGroups.clear();
   lb.roundCompleteShown = false;
+  lb.failedSaves = 0;
+  lb.lastLabelAt = 0;
+  lb.lastNavAt   = 0;
+  lb.navDir      = 1;
+  clearTimeout(lb.settleTimer);
   morphStatus    = {};
   if (morphPollTimer) { clearInterval(morphPollTimer); morphPollTimer = null; }
 
@@ -1049,7 +1268,7 @@ async function openMode(expId, readOnly) {
       get(`/api/experiments/${expId}/frames`),
     ]);
     lb.exp    = exp;
-    lb.frames = frames;
+    lbSetFrames(frames);
 
     const firstUnlabeled = frames.findIndex(f => f.label === "Unlabeled" && !f.missing);
     lb.idx = firstUnlabeled >= 0 ? firstUnlabeled : 0;
@@ -1089,6 +1308,8 @@ function showLabelView() {
 }
 
 function closeLabelView() {
+  lbFlushSaves();                  // pending entries carry their own experiment id
+  clearTimeout(lb.settleTimer);
   if (morphPollTimer) { clearInterval(morphPollTimer); morphPollTimer = null; }
   document.getElementById("main-wrapper").style.display   = "";
   document.getElementById("view-label").classList.remove("active");
@@ -1394,24 +1615,98 @@ function lbRenderImage() {
 function renderSidebarList() {
   const list   = document.getElementById("lb-sidebar-list");
   const frames = filteredFrames();
+  const curTs  = lbCurrentFrame()?.timestep;
 
-  list.innerHTML = frames.map(f => {
-    const isCur = f.timestep === lbCurrentFrame()?.timestep;
-    const isConflict = f.label_1 && f.label_2 && f.label_1 !== f.label_2 && !f.label_final;
-    const extraDots = isConflict
-      ? `<div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label_1] ?? 'var(--muted)'};width:6px;height:6px"></div>` +
-        `<div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label_2] ?? 'var(--muted)'};width:6px;height:6px"></div>`
-      : '';
-    return `<div class="lb-ts-item ${isCur ? "current" : ""}" onclick="lbGoToTs(${f.timestep})">
-      <div class="lb-ts-dot" style="background:${LABEL_COLOR[f.label] ?? 'var(--muted)'}"></div>
-      ${extraDots}
-      <span class="lb-ts-num">${f.timestep}</span>
-      ${lb.filter === "all" ? `<span class="lb-ts-lbl">${f.label === "Unlabeled" ? "" : f.label.split(" ")[0]}</span>` : ""}
-    </div>`;
-  }).join("");
+  lb.sideNodes = new Map();
+  const frag = document.createDocumentFragment();
+  frames.forEach(f => frag.appendChild(lbBuildSideRow(f, curTs)));
+  list.replaceChildren(frag);
 
-  const cur = list.querySelector(".current");
-  if (cur) cur.scrollIntoView({ block: "nearest" });
+  lb.sideNodes.get(curTs)?.scrollIntoView({ block: "nearest" });
+}
+
+function lbBuildSideRow(f, curTs) {
+  const row = document.createElement("div");
+  row.className = "lb-ts-item" + (f.timestep === curTs ? " current" : "");
+  row.addEventListener("click", () => lbGoToTs(f.timestep));
+
+  const dot = document.createElement("div");
+  dot.className = "lb-ts-dot";
+  dot.style.background = LABEL_COLOR[f.label] ?? "var(--muted)";
+  row.appendChild(dot);
+
+  if (f.label_1 && f.label_2 && f.label_1 !== f.label_2 && !f.label_final) {
+    [f.label_1, f.label_2].forEach(l => {
+      const d = document.createElement("div");
+      d.className = "lb-ts-dot";
+      d.style.background = LABEL_COLOR[l] ?? "var(--muted)";
+      d.style.width = d.style.height = "6px";
+      row.appendChild(d);
+    });
+  }
+
+  const num = document.createElement("span");
+  num.className   = "lb-ts-num";
+  num.textContent = f.timestep;
+  row.appendChild(num);
+
+  if (lb.filter === "all") {
+    const lbl = document.createElement("span");
+    lbl.className   = "lb-ts-lbl";
+    lbl.textContent = f.label === "Unlabeled" ? "" : f.label.split(" ")[0];
+    row.appendChild(lbl);
+  }
+
+  lb.sideNodes.set(f.timestep, row);
+  return row;
+}
+
+// ── Incremental updates ───────────────────────────────────────────────────────
+// A single label change touches only its own nodes; rebuilding the whole
+// timeline and sidebar per key press is what made a held key stutter.
+
+function lbTouchFrame(ts) {
+  const idx = lbIdxOf(ts);
+  if (idx < 0) return;
+  const f = lb.frames[idx];
+
+  const seg = lb.tlNodes.get(ts);
+  if (seg) {
+    seg.style.background = LABEL_COLOR[f.label] ?? "var(--muted)";
+    seg.title = `ts:${f.timestep} — ${f.label}`;
+  }
+
+  const row = lb.sideNodes.get(ts);
+  if (!row) return;
+  if (!lbMatchesFilter(f)) {        // e.g. just labeled while filtering unlabeled
+    row.remove();
+    lb.sideNodes.delete(ts);
+    return;
+  }
+  const dot = row.querySelector(".lb-ts-dot");
+  if (dot) dot.style.background = LABEL_COLOR[f.label] ?? "var(--muted)";
+  const lbl = row.querySelector(".lb-ts-lbl");
+  if (lbl) lbl.textContent = f.label === "Unlabeled" ? "" : f.label.split(" ")[0];
+}
+
+function lbMoveCurrent(prevTs, ts) {
+  if (prevTs !== undefined && prevTs !== ts) {
+    lb.tlNodes.get(prevTs)?.classList.remove("current");
+    lb.sideNodes.get(prevTs)?.classList.remove("current");
+  }
+  lb.tlNodes.get(ts)?.classList.add("current");
+  const row = lb.sideNodes.get(ts);
+  if (row) {
+    row.classList.add("current");
+    row.scrollIntoView({ block: "nearest" });
+  }
+}
+
+// Just the "current frame carries this label" highlight in the legend.
+function lbUpdateLegendCurrent() {
+  const cur = lbCurrentFrame();
+  document.querySelectorAll("#lb-legend .lb-legend-item").forEach(el =>
+    el.classList.toggle("current-label", !!cur && el.dataset.label === cur.label));
 }
 
 function toggleGroup(lbl) {
@@ -1425,12 +1720,18 @@ function toggleGroup(lbl) {
 function lbRenderTimeline() {
   const tl  = document.getElementById("lb-timeline");
   const cur = lbCurrentFrame();
-  tl.innerHTML = lb.frames.map((f, i) =>
-    `<div class="lb-tl-seg ${f.timestep === cur?.timestep ? "current" : ""}"
-          style="background:${LABEL_COLOR[f.label] ?? 'var(--muted)'}"
-          title="ts:${f.timestep} — ${f.label}"
-          onclick="lbGoTo(${i})"></div>`
-  ).join("");
+  lb.tlNodes = new Map();
+  const frag = document.createDocumentFragment();
+  lb.frames.forEach((f, i) => {
+    const seg = document.createElement("div");
+    seg.className = "lb-tl-seg" + (f.timestep === cur?.timestep ? " current" : "");
+    seg.style.background = LABEL_COLOR[f.label] ?? "var(--muted)";
+    seg.title = `ts:${f.timestep} — ${f.label}`;
+    seg.addEventListener("click", () => lbGoTo(i));
+    frag.appendChild(seg);
+    lb.tlNodes.set(f.timestep, seg);
+  });
+  tl.replaceChildren(frag);
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -1446,17 +1747,22 @@ function lbRenderLegend() {
     LABELS.map((lbl, i) => {
       const n = counts[lbl];
       const countStr = n > 0 ? `<span style="font-size:10px;color:var(--muted);margin-left:3px">(${n})</span>` : "";
-      return `<div class="lb-legend-item ${cur && cur.label === lbl ? "current-label" : ""}">
+      const esc = lbl.replace(/'/g, "\\'");
+      // ⇥ = label this frame and every later one with this label.
+      const fillBtn = lb.readOnly ? "" :
+        `<button class="lb-fill-btn" onclick="lbFillToEnd('${esc}')"
+                 title="Label this frame and all following ones as ${lbl} (Shift+${i + 1})">⇥</button>`;
+      return `<div class="lb-legend-item ${cur && cur.label === lbl ? "current-label" : ""}" data-label="${lbl}">
         <span class="lb-legend-key">${i + 1}</span>
         <span class="lb-legend-dot" style="background:${LABEL_COLOR[lbl]}"></span>
-        ${lbl}${countStr}
+        ${lbl}${countStr}${fillBtn}
       </div>`;
     }).join("") +
     `<div id="lb-legend-spacer"></div>
      <div id="lb-nav-hint">
        <span class="kb">←</span><span class="kb">→</span>&nbsp;navigate&nbsp;
        <span class="kb">n</span>&nbsp;next exp&nbsp;
-       ${lb.readOnly ? "" : '<span class="kb">Ctrl+Z</span>&nbsp;undo&nbsp;<span class="kb">b</span>&nbsp;bug&nbsp;<span class="kb">f</span>&nbsp;finished'}
+       ${lb.readOnly ? "" : '<span class="kb">Ctrl+Z</span>&nbsp;undo&nbsp;<span class="kb">⇧1–9</span>&nbsp;fill to end&nbsp;<span class="kb">b</span>&nbsp;bug&nbsp;<span class="kb">f</span>&nbsp;finished'}
      </div>
      <button class="btn xs ${lb.aggOpen ? "active" : ""}" id="btn-agg-toggle" onclick="toggleAgg()">By Label</button>`;
 }
@@ -1467,15 +1773,17 @@ function lbRenderLegend() {
 
 function lbGoTo(idx) {
   if (idx < 0 || idx >= lb.frames.length) return;
+  const prevTs = lb.frames[lb.idx]?.timestep;
   lb.idx = idx;
   lbRenderImage();
-  renderSidebarList();
-  lbRenderTimeline();
-  lbRenderLegend();
+  lbMoveCurrent(prevTs, lb.frames[idx].timestep);
+  lbUpdateLegendCurrent();
+  lbPreload(idx);
 }
 
 // Navigate by +1/-1, respecting active filter
 function lbNav(delta) {
+  lb.navDir = delta >= 0 ? 1 : -1;
   const filtered = filteredFrames();
   if (!filtered.length) return;
   const curTs  = lbCurrentFrame()?.timestep;
@@ -1498,98 +1806,118 @@ function lbGoToTs(ts) {
 // Labeling
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function lbSetLabel(label) {
+// Apply a label to the current frame.  The change is shown immediately and
+// saved in the background, so holding a key never waits on the network.
+function lbSetLabel(label) {
   if (lb.readOnly) return;
   const f = lbCurrentFrame();
   if (!f) return;
+  const ts  = f.timestep;
+  const idx = lbIdxOf(ts);
+  if (idx < 0) return;
+
+  // Mirror what the server writes for this stage, so the local copy stays
+  // truthful for the progress and end-of-round checks.
+  const stage = lb.exp?.labeling_stage;
+  const patch = { label };
+  if      (stage === "round_1") patch.label_1 = label;
+  else if (stage === "round_2") patch.label_2 = label;
+  else if (stage === "correction" || stage === "done") patch.label_final = label;
+  lb.frames[idx] = { ...f, ...patch };
+
+  lbQueueSave(ts, label);
+  lbTouchFrame(ts);
+  lbRenderLegend();
+  updateProgressHeader();
+
+  // Auto-advance to the next frame that still needs attention.
+  const nextIdx = lbNextTargetIdx(idx);
+  lb.navDir = 1;
+  if (nextIdx >= 0) {
+    lbGoTo(nextIdx);
+  } else {
+    lbRenderImage();
+    lbUpdateLegendCurrent();
+  }
+}
+
+// Index of the next unlabeled frame (or next unresolved conflict when the
+// conflicts filter is on), searching forward from *fromIdx*.
+function lbNextTargetIdx(fromIdx) {
+  const wantConflict = lb.filter === "conflicts";
+  for (let i = fromIdx + 1; i < lb.frames.length; i++) {
+    const fr = lb.frames[i];
+    if (fr.missing) continue;
+    if (wantConflict
+      ? (fr.label_1 !== fr.label_2 && fr.label_final == null)
+      : fr.label === "Unlabeled") return i;
+  }
+  return -1;
+}
+
+// ── Fill to end ───────────────────────────────────────────────────────────────
+// Once a run has stopped solidifying nothing else can follow it, so the rest of
+// the experiment can be labeled in one action rather than frame by frame.
+
+async function lbFillToEnd(label) {
+  if (lb.readOnly || !lb.expId) return;
+  const f = lbCurrentFrame();
+  if (!f) return;
+
+  const targets = lb.frames.filter(fr => fr.timestep >= f.timestep && !fr.missing);
+  if (!targets.length) { toast("No frames to fill from here"); return; }
+  const lastTs      = targets[targets.length - 1].timestep;
+  const overwritten = targets.filter(
+    fr => fr.label !== "Unlabeled" && fr.label !== label).length;
+
+  const warning = overwritten > 0
+    ? `\n\n${overwritten} of them already carry a different label and will be overwritten.`
+    : "";
+  if (!confirm(
+    `Label all ${targets.length} frames from ts ${f.timestep} to ts ${lastTs} ` +
+    `as "${label}"?${warning}\n\nCtrl+Z undoes the whole fill.`
+  )) return;
+
+  await lbFlushPending();
   try {
-    const updated = await patch(`/api/frames/${lb.expId}/${f.timestep}`, { label });
-    // Use timestep (captured before await) to find the correct index — lb.idx may have
-    // changed if the user navigated while the request was in flight.
-    const savedIdx = lb.frames.findIndex(fr => fr.timestep === f.timestep);
-    if (savedIdx >= 0) lb.frames[savedIdx] = updated;
+    const r = await post(`/api/experiments/${lb.expId}/fill_from`,
+                         { timestep: f.timestep, label });
+    const wasStage = lb.exp?.labeling_stage;
+    if (r.experiment) lb.exp = r.experiment;
+    lbSetFrames(r.frames);
+    lbRenderAll();
+    updateExpInfoHeader();
+    toast(`Labeled ${r.updated} frame${r.updated === 1 ? "" : "s"} as "${label}"`);
 
-    // Check if all conflicts resolved in correction mode
-    const stage = lb.exp?.labeling_stage;
-    if (stage === "correction" && updated.label_final != null) {
-      const remaining = lb.frames.filter(fr => fr.label_1 !== fr.label_2 && fr.label_final == null && !fr.missing).length;
-      if (remaining === 0) {
-        // All conflicts resolved — re-fetch experiment to get updated stage
-        try {
-          lb.exp = await get(`/api/experiments/${lb.expId}`);
-          if (lb.exp.labeling_stage === "done") {
-            lb.filter = "all";
-            const conflictBtn = document.getElementById("filter-conflicts");
-            if (conflictBtn) conflictBtn.style.display = "none";
-            updateExpInfoHeader();
-            // Auto-assign flags at final completion
-            autoAssignFlags();
-            showExpDoneModal(
-              "All Conflicts Resolved!",
-              "Every conflict has been resolved. The experiment is now finalised."
-            );
-          }
-        } catch {}
-      }
-    }
-
-    // In review (done) stage, keep flags in sync after every label change
-    if (stage === "done") autoAssignFlags();
-
-    // Check if round 1 or round 2 just completed
-    if (!lb.roundCompleteShown && !lb.readOnly) {
-      const stageNow = lb.exp?.labeling_stage;
-      if (stageNow === 'round_1' || stageNow === 'round_2') {
-        const nonMissing = lb.frames.filter(fr => !fr.missing);
-        const unlabeled  = nonMissing.filter(fr => fr.label === 'Unlabeled').length;
-        if (unlabeled === 0 && nonMissing.length > 0) {
-          lb.roundCompleteShown = true;
-          showRoundCompleteOptions(stageNow);
-        }
-      }
-    }
-
-    // Auto-advance: next unlabeled/conflict in current filter set
-    const currentFilter = lb.filter;
-    let advance = null;
-    if (currentFilter === "conflicts") {
-      const nextConflicts = lb.frames.filter(fr => fr.timestep > f.timestep && fr.label_1 !== fr.label_2 && fr.label_final == null && !fr.missing);
-      advance = nextConflicts.length > 0 ? nextConflicts[0] : null;
+    if (wasStage === "correction" && lb.exp?.labeling_stage === "done") {
+      lbApplyDoneStage("All Conflicts Resolved!",
+        "Every conflict has been resolved. The experiment is now finalised.");
     } else {
-      const searchSet = filteredFrames().filter(fr => fr.timestep > f.timestep && fr.label === "Unlabeled" && !fr.missing);
-      advance = searchSet.length > 0 ? searchSet[0] : null;
-    }
-
-    lbRenderTimeline();
-    lbRenderLegend();
-    renderSidebarList();
-    if (lb.aggOpen) renderAggPanel();
-    updateProgressHeader();
-    updateStageBtns();
-
-    if (advance) {
-      lbGoToTs(advance.timestep);
-    } else {
-      lbRenderImage();
+      lbScheduleSettle();
     }
   } catch (e) {
-    toast("Save failed: " + e.message);
+    toast("Fill failed: " + e.message);
   }
 }
 
 async function lbUndo() {
-  if (lb.readOnly) return;
+  if (lb.readOnly || lb.undoing) return;
+  lb.undoing = true;
   try {
+    await lbFlushPending();          // never undo past a save still in flight
     const result = await post("/api/undo");
     if (!result.reverted_to) { toast("Nothing to undo"); return; }
-    const i = lb.frames.findIndex(f => f.timestep === result.timestep);
-    if (i >= 0) lb.frames[i] = { ...lb.frames[i], label: result.reverted_to };
-    lbGoTo(i >= 0 ? i : lb.idx);
-    if (lb.aggOpen) renderAggPanel();
-    updateProgressHeader();
-    toast(`Undone: ts ${result.timestep} → ${result.reverted_to}`);
+    // Reload rather than patch locally: one undo can span a whole fill and
+    // also touches the stage-specific columns.
+    await lbReloadFrames();
+    lbGoToTs(result.timestep);
+    toast(result.count > 1
+      ? `Undone: ${result.count} frames → ${result.reverted_to}`
+      : `Undone: ts ${result.timestep} → ${result.reverted_to}`);
   } catch (e) {
     toast("Undo failed: " + e.message);
+  } finally {
+    lb.undoing = false;
   }
 }
 
@@ -1685,11 +2013,12 @@ async function showRoundCompleteOptions(stage) {
 }
 
 async function checkAgreement() {
+  await lbFlushPending();
   try {
     const r = await post(`/api/experiments/${lb.expId}/check_agreement`);
     lb.exp = r;
     const frames = await get(`/api/experiments/${lb.expId}/frames`);
-    lb.frames = frames;
+    lbSetFrames(frames);
     if (r.stage === "done") {
       lb.filter = "all";
       lb.idx = 0;
@@ -1952,6 +2281,7 @@ async function resetCurrentExperiment() {
   const passNum = stage === 'round_2' ? 2 : 1;
   const passLabel = stage === 'round_2' ? 'Round 2' : 'Round 1';
   if (!confirm(`Reset all ${passLabel} labels to Unlabeled? This cannot be undone.`)) return;
+  lb.pending.clear();              // these are about to be wiped anyway
   try {
     const r = await post(`/api/experiments/${lb.expId}/reset/${passNum}`);
     const [exp, frames] = await Promise.all([
@@ -1959,7 +2289,7 @@ async function resetCurrentExperiment() {
       get(`/api/experiments/${lb.expId}/frames`),
     ]);
     lb.exp    = exp;
-    lb.frames = frames;
+    lbSetFrames(frames);
     lb.idx    = 0;
     lbRenderAll();
     toast(`Reset ${r.reset} ${passLabel} frames to Unlabeled`);
@@ -1970,19 +2300,75 @@ async function resetCurrentExperiment() {
 // Keyboard
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Read the digit from the physical key, so Shift+3 ("#" on many layouts) still
+// resolves to 3.
+function lbDigitFromEvent(e) {
+  const m = /^(?:Digit|Numpad)([1-9])$/.exec(e.code || "");
+  if (m) return +m[1];
+  return /^[1-9]$/.test(e.key) ? +e.key : 0;
+}
+
 document.addEventListener("keydown", e => {
   if (!document.getElementById("view-label").classList.contains("active")) return;
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  const now = performance.now();
 
-  if (e.key === "ArrowRight") { e.preventDefault(); lbNav(+1); }
-  else if (e.key === "ArrowLeft")  { e.preventDefault(); lbNav(-1); }
-  else if (e.key === "n") { e.preventDefault(); lbNextExperiment(); }
-  else if (e.key === "z" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); lbUndo(); }
-  else if (!lb.readOnly) {
-    const d = parseInt(e.key);
-    if (d >= 1 && d <= 9) { e.preventDefault(); lbSetLabel(LABELS[d - 1]); }
-    else if (e.key === "b") { e.preventDefault(); cycleBool("bug_free"); }
-    else if (e.key === "f") { e.preventDefault(); cycleBool("correctly_finished"); }
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    e.preventDefault();
+    // Held arrows repeat far faster than images can be shown; cap the rate.
+    if (e.repeat && now - lb.lastNavAt < LB_REPEAT_MS) return;
+    lb.lastNavAt = now;
+    lbNav(e.key === "ArrowRight" ? +1 : -1);
+    return;
+  }
+  if (e.key === "n") { e.preventDefault(); if (!e.repeat) lbNextExperiment(); return; }
+  if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault(); lbUndo(); return;      // lbUndo drops repeats while busy
+  }
+  if (lb.readOnly) return;
+
+  const d = lbDigitFromEvent(e);
+  if (d && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    if (e.shiftKey) {
+      if (!e.repeat) lbFillToEnd(LABELS[d - 1]);   // never auto-repeat a bulk fill
+      return;
+    }
+    // Holding a label key is the natural way through a long run of identical
+    // frames — cap the rate so the view and the save queue keep up.
+    if (e.repeat && now - lb.lastLabelAt < LB_REPEAT_MS) return;
+    lb.lastLabelAt = now;
+    lbSetLabel(LABELS[d - 1]);
+    return;
+  }
+  if (e.key === "b") { e.preventDefault(); if (!e.repeat) cycleBool("bug_free"); }
+  else if (e.key === "f") { e.preventDefault(); if (!e.repeat) cycleBool("correctly_finished"); }
+});
+
+// Save the moment a held key is released.
+document.addEventListener("keyup", e => {
+  if (lb.pending.size && lbDigitFromEvent(e)) lbFlushSaves();
+});
+
+// Nothing queued may be lost when the tab is hidden or closed.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") lbFlushSaves();
+});
+
+window.addEventListener("beforeunload", () => {
+  if (!lb.pending.size) return;
+  const byExp = new Map();
+  lb.pending.forEach(c => {
+    if (!byExp.has(c.expId)) byExp.set(c.expId, []);
+    byExp.get(c.expId).push({ timestep: c.timestep, label: c.label });
+  });
+  for (const [expId, changes] of byExp) {
+    fetch(`/api/frames/${expId}/bulk`, {
+      method:    "PATCH",
+      headers:   { "Content-Type": "application/json" },
+      body:      JSON.stringify({ changes }),
+      keepalive: true,
+    });
   }
 });
 

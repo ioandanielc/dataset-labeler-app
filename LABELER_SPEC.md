@@ -159,6 +159,8 @@ An **experiment** is identified by `(P, VX, LS, ST)`. The folder path is stored 
   - `GET /api/experiments` — list with progress stats
   - `GET /api/experiments/{id}/frames` — all frames for an experiment
   - `PATCH /api/frames/{experiment_id}/{timestep}` — update label
+  - `PATCH /api/frames/{experiment_id}/bulk` — update many labels in one request
+  - `POST /api/experiments/{id}/fill_from` — label a timestep and every later one
   - `PATCH /api/experiments/{id}` — update booleans
   - `POST /api/scan` — trigger re-scan
   - `POST /api/undo` — undo last label change
@@ -180,14 +182,24 @@ An **experiment** is identified by `(P, VX, LS, ST)`. The folder path is stored 
 ### Label Mode
 
 - **Main area**: current frame image, displayed large.
-- **Keyboard shortcuts**: number keys 1–7 assign labels (legend always visible on screen).
+- **Keyboard shortcuts**: number keys 1–9 assign labels (legend always visible on screen).
+  Holding a key down keeps labeling; label changes are applied immediately and
+  written in batches so the view never waits on the network.
+- **Fill to end**: Shift + a number key (or the ⇥ button on a legend entry)
+  labels the current timestep and every later one with that label — for runs
+  where no other phase can follow. Frames missing on disk are skipped, and the
+  whole fill is a single undo step.
 - **Navigation**:
   - Arrow keys (left/right) for prev/next frame — does NOT change the label (skip).
   - Navigation is NOT locked to consecutive order. User can jump freely via:
     - **Timeline bar** at bottom — clickable, shows position in sequence.
     - **Timestep list panel** — scrollable/slideable sidebar showing all timesteps with their current label.
-- **Auto-save**: every label assignment writes to SQLite immediately.
-- **Undo**: Ctrl+Z pops from undo stack, reverts last label change.
+- **Auto-save**: every label assignment is written to SQLite, batched over a
+  short window so a held key costs one request per batch rather than one per
+  frame. Pending changes are flushed before undo, before switching experiment
+  or round, and when the page is hidden or closed.
+- **Undo**: Ctrl+Z pops from undo stack, reverts the last label change — or, for
+  a fill, every frame it touched.
 - **Per-experiment progress**: visible while labeling (percentage + breakdown by class).
 - **Experiment booleans**: Bug Free and Correctly Finished toggleable from within label mode.
 

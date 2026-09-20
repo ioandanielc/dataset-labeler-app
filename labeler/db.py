@@ -17,6 +17,7 @@ Two tables are managed here:
 import csv
 import io
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +39,14 @@ LABELS = [
 
 #: Maps keyboard shortcut digit → label name, e.g. ``{"1": "Unlabeled", ...}``.
 SHORTCUT_TO_LABEL: dict[str, str] = {str(i + 1): label for i, label in enumerate(LABELS)}
+
+#: Extra column written alongside ``label`` for each labeling stage.
+_STAGE_COLUMNS: dict[str, str] = {
+    "round_1":    "label_1",
+    "round_2":    "label_2",
+    "correction": "label_final",
+    "done":       "label_final",
+}
 
 # ---------------------------------------------------------------------------
 # SQL schema
@@ -91,7 +100,9 @@ class LabelDB:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
 
-        # check_same_thread=False is safe here — Flask dev server is single-threaded.
+        # check_same_thread=False lets the Flask worker threads and the
+        # background morph thread share one connection; _lock serialises the
+        # read-then-write sequences so they cannot interleave.
         # WAL mode lets reads and writes coexist without blocking each other.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row   # row["P"] instead of row[0]
@@ -100,8 +111,13 @@ class LabelDB:
         self._conn.commit()
         self._migrate()
 
-        # In-memory only — resets on restart. Each entry: (exp_id, timestep, old, new).
-        self._undo_stack: list[tuple[int, int, str, str]] = []
+        # Serialises every read-modify-write against the shared connection.
+        self._lock = threading.RLock()
+
+        # In-memory only — resets on restart.  One entry per undoable operation:
+        # {"experiment_id", "stage", "stage_changed",
+        #  "changes": [(ts, old_label, old_stage_column, new_label)]}.
+        self._undo_stack: list[dict] = []
 
     # ------------------------------------------------------------------
     # Migration helpers
@@ -232,13 +248,9 @@ class LabelDB:
         self._conn.commit()
 
     def set_label(self, experiment_id: int, timestep: int, new_label: str) -> bool:
-        """Update a frame's label and push the old value onto the undo stack.
+        """Update a single frame's label and push the old value onto the undo stack.
 
-        The column updated depends on the experiment's current labeling_stage:
-          - round_1: writes label and label_1
-          - round_2: writes label and label_2
-          - correction: writes label and label_final; checks for completion
-          - done: no-op, returns False
+        Thin wrapper around :meth:`set_labels` — see there for the stage rules.
 
         Args:
             experiment_id: Parent experiment id.
@@ -246,153 +258,250 @@ class LabelDB:
             new_label: One of the :data:`LABELS` constants.
 
         Returns:
-            ``True`` on success, ``False`` if the frame row does not exist or stage is done.
+            ``True`` on success, ``False`` if the experiment or frame row does
+            not exist.
         """
-        # Look up stage
-        exp_row = self._conn.execute(
-            "SELECT labeling_stage FROM experiments WHERE id = ?", (experiment_id,)
-        ).fetchone()
-        if exp_row is None:
-            return False
-        stage = exp_row["labeling_stage"]
+        result = self.set_labels(experiment_id, [(timestep, new_label)])
+        return bool(result and result["matched"])
 
-        cur = self._conn.execute(
-            "SELECT label FROM frames WHERE experiment_id = ? AND timestep = ?",
-            (experiment_id, timestep),
-        )
-        row = cur.fetchone()
-        if row is None:
-            return False
+    def set_labels(
+        self,
+        experiment_id: int,
+        changes,
+        grouped: bool = False,
+    ) -> Optional[dict]:
+        """Apply many label changes to one experiment in a single transaction.
 
-        old_label = row["label"]
+        The column written alongside ``label`` depends on the experiment's
+        current labeling_stage:
+          - round_1: label_1
+          - round_2: label_2
+          - correction / done: label_final
 
-        if stage == "done":
-            # Voting/done mode: allow re-labelling the final label in place.
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_final = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (new_label, new_label, experiment_id, timestep),
-            )
-            self._conn.commit()
-            self._undo_stack.append((experiment_id, timestep, old_label, new_label))
-            return True
+        In ``correction`` stage the experiment advances to ``done`` once no
+        unresolved conflicts remain.
 
-        if stage == "round_1":
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_1 = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (new_label, new_label, experiment_id, timestep),
-            )
-        elif stage == "round_2":
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_2 = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (new_label, new_label, experiment_id, timestep),
-            )
-        elif stage == "correction":
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_final = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (new_label, new_label, experiment_id, timestep),
-            )
-            self._conn.commit()
-            # Check if all conflicts are now resolved
-            remaining = self._conn.execute(
-                """
-                SELECT COUNT(*) AS cnt FROM frames
-                WHERE experiment_id = ? AND label_1 != label_2 AND label_final IS NULL AND missing = 0
-                """,
-                (experiment_id,),
-            ).fetchone()["cnt"]
-            if remaining == 0:
-                self._conn.execute(
-                    "UPDATE experiments SET labeling_stage = 'done' WHERE id = ?",
-                    (experiment_id,),
-                )
-            self._conn.commit()
-            self._undo_stack.append((experiment_id, timestep, old_label, new_label))
-            return True
-
-        self._conn.commit()
-        self._undo_stack.append((experiment_id, timestep, old_label, new_label))
-        return True
-
-    def undo(self) -> Optional[dict]:
-        """Revert the last label change by popping the undo stack.
-
-        Also reverts the appropriate stage-specific column (label_1, label_2, or label_final).
+        Args:
+            experiment_id: Parent experiment id.
+            changes: Iterable of ``(timestep, new_label)`` pairs.  Later entries
+                win if a timestep appears twice.
+            grouped: When True the whole batch becomes **one** undo step;
+                otherwise every frame change is its own undo step.
 
         Returns:
-            A dict ``{experiment_id, timestep, reverted_to, was}`` describing
-            what changed, or ``None`` if the stack is empty.
+            ``{"matched": [ts, ...], "changed": [(ts, old, new), ...],
+            "stage": str, "stage_changed": bool}`` or ``None`` if the
+            experiment does not exist.
         """
-        if not self._undo_stack:
-            return None
+        with self._lock:
+            exp_row = self._conn.execute(
+                "SELECT labeling_stage FROM experiments WHERE id = ?", (experiment_id,)
+            ).fetchone()
+            if exp_row is None:
+                return None
+            stage = exp_row["labeling_stage"]
+            extra_col = _STAGE_COLUMNS.get(stage)
 
-        experiment_id, timestep, old_label, new_label = self._undo_stack.pop()
+            wanted: dict[int, str] = {}
+            for timestep, label in changes:
+                wanted[int(timestep)] = label
+            if not wanted:
+                return {"matched": [], "changed": [], "stage": stage, "stage_changed": False}
 
-        # Look up current stage to know which extra column to revert
-        exp_row = self._conn.execute(
-            "SELECT labeling_stage FROM experiments WHERE id = ?", (experiment_id,)
-        ).fetchone()
-        stage = exp_row["labeling_stage"] if exp_row else "round_1"
+            rows = self._rows_for(experiment_id, wanted.keys(), extra_col)
+            matched = sorted(rows)
+            # (timestep, old label, old stage-column value, new label) — the
+            # old stage-column value is kept so undo can restore it exactly.
+            written: list[tuple[int, str, Optional[str], str]] = []
+            for timestep in matched:
+                row       = rows[timestep]
+                new       = wanted[timestep]
+                old       = row["label"]
+                old_extra = row[extra_col] if extra_col else None
+                # A frame whose `label` already matches may still need the
+                # stage column filled in (e.g. resolving a conflict in favour
+                # of the round-1 label), so compare both columns.
+                if old != new or (extra_col and old_extra != new):
+                    written.append((timestep, old, old_extra, new))
 
-        if stage == "round_1":
-            self._conn.execute(
+            if written:
+                if extra_col:
+                    sql = (
+                        f"UPDATE frames SET label = ?, {extra_col} = ?, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE experiment_id = ? AND timestep = ?"
+                    )
+                    params = [(new, new, experiment_id, ts) for ts, _o, _oe, new in written]
+                else:
+                    sql = (
+                        "UPDATE frames SET label = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE experiment_id = ? AND timestep = ?"
+                    )
+                    params = [(new, experiment_id, ts) for ts, _o, _oe, new in written]
+                self._conn.executemany(sql, params)
+
+            stage_changed = False
+            if stage == "correction" and written:
+                remaining = self._conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM frames
+                    WHERE experiment_id = ? AND label_1 != label_2
+                      AND label_final IS NULL AND missing = 0
+                    """,
+                    (experiment_id,),
+                ).fetchone()["cnt"]
+                if remaining == 0:
+                    self._conn.execute(
+                        "UPDATE experiments SET labeling_stage = 'done' WHERE id = ?",
+                        (experiment_id,),
+                    )
+                    stage_changed = True
+
+            self._conn.commit()
+
+            if written:
+                if grouped:
+                    self._undo_stack.append({
+                        "experiment_id": experiment_id,
+                        "stage":         stage,
+                        "stage_changed": stage_changed,
+                        "changes":       written,
+                    })
+                else:
+                    # One undo step per frame, so Ctrl+Z walks back key presses
+                    # one at a time exactly as before.
+                    for i, change in enumerate(written):
+                        self._undo_stack.append({
+                            "experiment_id": experiment_id,
+                            "stage":         stage,
+                            # Only the last step of the batch may have flipped
+                            # the stage, so only it restores it.
+                            "stage_changed": stage_changed and i == len(written) - 1,
+                            "changes":       [change],
+                        })
+
+            return {
+                "matched":       matched,
+                "changed":       [(ts, old, new) for ts, old, _oe, new in written],
+                "stage":         stage,
+                "stage_changed": stage_changed,
+            }
+
+    def fill_label_from(
+        self,
+        experiment_id: int,
+        start_timestep: int,
+        label: str,
+    ) -> Optional[dict]:
+        """Label *start_timestep* and every later frame with *label*.
+
+        Frames whose image file is missing on disk are skipped — they are not
+        counted as labelable anywhere else in the app either.  The whole fill
+        is a **single** undo step.
+
+        Args:
+            experiment_id: Parent experiment id.
+            start_timestep: First timestep to label (inclusive).
+            label: One of the :data:`LABELS` constants.
+
+        Returns:
+            Same dict as :meth:`set_labels`, or ``None`` if the experiment does
+            not exist.
+        """
+        with self._lock:
+            rows = self._conn.execute(
                 """
-                UPDATE frames
-                SET label = ?, label_1 = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
+                SELECT timestep FROM frames
+                WHERE experiment_id = ? AND timestep >= ? AND missing = 0
+                ORDER BY timestep
                 """,
-                (old_label, old_label if old_label != "Unlabeled" else None, experiment_id, timestep),
-            )
-        elif stage == "round_2":
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_2 = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (old_label, old_label if old_label != "Unlabeled" else None, experiment_id, timestep),
-            )
-        elif stage in ("correction", "done"):
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, label_final = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (old_label, old_label if old_label != "Unlabeled" else None, experiment_id, timestep),
-            )
-        else:
-            self._conn.execute(
-                """
-                UPDATE frames
-                SET label = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE experiment_id = ? AND timestep = ?
-                """,
-                (old_label, experiment_id, timestep),
+                (experiment_id, start_timestep),
+            ).fetchall()
+            return self.set_labels(
+                experiment_id,
+                [(row["timestep"], label) for row in rows],
+                grouped=True,
             )
 
-        self._conn.commit()
-        return {
-            "experiment_id": experiment_id,
-            "timestep": timestep,
-            "reverted_to": old_label,
-            "was": new_label,
-        }
+    def _rows_for(self, experiment_id: int, timesteps, extra_col: Optional[str] = None) -> dict:
+        """Fetch ``{timestep: row}`` for specific timesteps, chunked to stay
+        under SQLite's bound-parameter limit."""
+        cols = "timestep, label" + (f", {extra_col}" if extra_col else "")
+        ts_list = list(timesteps)
+        out: dict[int, sqlite3.Row] = {}
+        for i in range(0, len(ts_list), 400):
+            chunk = ts_list[i:i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            cur = self._conn.execute(
+                f"SELECT {cols} FROM frames "
+                f"WHERE experiment_id = ? AND timestep IN ({placeholders})",
+                (experiment_id, *chunk),
+            )
+            for row in cur:
+                out[row["timestep"]] = row
+        return out
+
+    def undo(self) -> Optional[dict]:
+        """Revert the last label operation by popping the undo stack.
+
+        One operation is one key press (a single frame) or one bulk fill (every
+        frame it touched).  The stage-specific column written at the time
+        (label_1, label_2 or label_final) is reverted too, and a
+        correction→done transition caused by the operation is rolled back.
+
+        Returns:
+            A dict ``{experiment_id, timestep, reverted_to, was, count,
+            changes}`` describing what changed, or ``None`` if the stack is
+            empty.  ``timestep``/``reverted_to``/``was`` describe the first
+            frame of the operation.
+        """
+        with self._lock:
+            if not self._undo_stack:
+                return None
+
+            op            = self._undo_stack.pop()
+            experiment_id = op["experiment_id"]
+            stage         = op["stage"]
+            extra_col     = _STAGE_COLUMNS.get(stage)
+
+            if extra_col:
+                sql = (
+                    f"UPDATE frames SET label = ?, {extra_col} = ?, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE experiment_id = ? AND timestep = ?"
+                )
+                params = [
+                    (old, old_extra, experiment_id, ts)
+                    for ts, old, old_extra, _new in op["changes"]
+                ]
+            else:
+                sql = (
+                    "UPDATE frames SET label = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE experiment_id = ? AND timestep = ?"
+                )
+                params = [(old, experiment_id, ts) for ts, old, _oe, _new in op["changes"]]
+            self._conn.executemany(sql, params)
+
+            if op.get("stage_changed"):
+                self._conn.execute(
+                    "UPDATE experiments SET labeling_stage = ? WHERE id = ?",
+                    (stage, experiment_id),
+                )
+            self._conn.commit()
+
+            first_ts, first_old, _first_extra, first_new = op["changes"][0]
+            return {
+                "experiment_id": experiment_id,
+                "timestep":      first_ts,
+                "reverted_to":   first_old,
+                "was":           first_new,
+                "count":         len(op["changes"]),
+                "stage_changed": bool(op.get("stage_changed")),
+                "changes": [
+                    {"timestep": ts, "reverted_to": old, "was": new}
+                    for ts, old, _oe, new in op["changes"]
+                ],
+            }
 
     def get_frames(self, experiment_id: int) -> list[sqlite3.Row]:
         """Return all frames for an experiment, sorted by timestep ascending.
@@ -408,6 +517,25 @@ class LabelDB:
             (experiment_id,),
         )
         return cur.fetchall()
+
+    def get_frame(self, experiment_id: int, timestep: int) -> Optional[sqlite3.Row]:
+        """Return one frame row, or ``None`` if it does not exist.
+
+        Preferred over scanning :meth:`get_frames` when only a single frame is
+        needed — the labeling hot path calls this on every key press.
+
+        Args:
+            experiment_id: Parent experiment id.
+            timestep: Frame timestep.
+
+        Returns:
+            A :class:`sqlite3.Row` or ``None``.
+        """
+        cur = self._conn.execute(
+            "SELECT * FROM frames WHERE experiment_id = ? AND timestep = ?",
+            (experiment_id, timestep),
+        )
+        return cur.fetchone()
 
     def get_existing_timesteps(self, experiment_id: int) -> set[int]:
         """Return the set of timesteps already stored in the DB for an experiment.
