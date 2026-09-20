@@ -17,7 +17,7 @@ from labeler.api import create_app
 
 _CONFIG_FILE = Path(__file__).parent / "labeler_config.json"
 
-DEFAULT_ROOT = "/Users/ioandanielcraciun/Python-Projects/cVAE-sph2img/data/raw/"
+DEFAULT_ROOT = "/Users/ioandanielcraciun/Downloads/output_data/"
 
 
 def _load_saved_root() -> str | None:

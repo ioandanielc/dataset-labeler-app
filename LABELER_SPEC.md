@@ -68,8 +68,10 @@ Timestep is an integer. Sort ascending for temporal order.
 | 5 | Forming Phase      | `5`     | Melt pool beginning to form.       |
 | 6 | Conduction         | `6`     | Stable conductive melt pool.       |
 | 7 | Keyhole            | `7`     | Keyhole regime.                    |
+| 8 | Scanning Stopped   | `8`     | Scanning process has stopped.      |
+| 9 | Solidifying Stopped | `9`    | Solidification has stopped.        |
 
-Rough expected temporal order: Initial Emptiness → Forming Phase → Conduction → Keyhole, but this is not enforced. Screenshot Bug and Unsure can appear anywhere.
+Rough expected temporal order: Initial Emptiness → Forming Phase → Conduction → Keyhole → Scanning Stopped → Solidifying Stopped, but this is not enforced. Screenshot Bug and Unsure can appear anywhere.
 
 ---
 

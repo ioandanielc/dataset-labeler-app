@@ -33,6 +33,7 @@ LABELS = [
     "Conduction",        # 6 — stable conductive melt pool
     "Keyhole",           # 7 — keyhole regime
     "Scanning Stopped",  # 8 — scanning process has stopped
+    "Solidifying Stopped", # 9 — solidification has stopped
 ]
 
 #: Maps keyboard shortcut digit → label name, e.g. ``{"1": "Unlabeled", ...}``.

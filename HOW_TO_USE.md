@@ -100,6 +100,8 @@ When you open an experiment, you see:
 | `5` | Forming Phase |
 | `6` | Conduction |
 | `7` | Keyhole |
+| `8` | Scanning Stopped |
+| `9` | Solidifying Stopped |
 | `Ctrl+Z` | Undo last label |
 | `b` | Toggle Bug Free flag |
 | `f` | Toggle Correctly Finished flag |
