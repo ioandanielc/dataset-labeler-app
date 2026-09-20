@@ -677,6 +677,9 @@ header .spacer { flex: 1; }
       <button class="btn sm" onclick="document.getElementById('modal-round-done').style.display='none';closeLabelView()">← Dashboard</button>
       <button class="btn sm primary" id="round-done-action">Switch</button>
     </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:14px">
+      Press <span class="kb">⏎</span> to continue
+    </div>
   </div>
 </div>
 
@@ -1927,7 +1930,7 @@ function lbRenderLegend() {
     `<div id="lb-legend-spacer"></div>
      <div id="lb-nav-hint">
        <span class="kb">←</span><span class="kb">→</span>&nbsp;navigate&nbsp;
-       <span class="kb">n</span><span class="kb">⏎</span>&nbsp;next exp&nbsp;
+       <span class="kb">n</span>&nbsp;next exp&nbsp;
        ${lb.readOnly ? "" : '<span class="kb">Ctrl+Z</span>&nbsp;undo&nbsp;<span class="kb">⇧1–9</span>&nbsp;fill to end&nbsp;<span class="kb">b</span>&nbsp;bug&nbsp;<span class="kb">f</span>&nbsp;finished'}
      </div>
      <button class="btn xs ${lb.aggOpen ? "active" : ""}" id="btn-agg-toggle" onclick="toggleAgg()">By Label</button>`;
@@ -2537,9 +2540,8 @@ document.addEventListener("keydown", e => {
     lbNav(e.key === "ArrowRight" ? +1 : -1);
     return;
   }
-  // Enter is the same as n — the quickest way on to the next run once this
-  // one is labeled.  Both are ignored while a dialog owns the keyboard.
-  if (e.key === "n" || e.key === "Enter") {
+  // Ignored while a dialog owns the keyboard.
+  if (e.key === "n") {
     e.preventDefault();
     if (!e.repeat && !anyModalOpen()) lbNextExperiment();
     return;
@@ -2604,6 +2606,16 @@ document.addEventListener("keydown", e => {
     MODAL_IDS
       .forEach(id => { document.getElementById(id).style.display = "none"; });
   }
+}, true);
+
+// Enter takes the offer on the prompt shown once an experiment is finished —
+// "Next Experiment" in single-pass mode, the round or voting switch otherwise.
+// It does nothing unless that prompt is actually on screen.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Enter" || e.repeat) return;
+  if (document.getElementById("modal-round-done")?.style.display !== "flex") return;
+  e.preventDefault();
+  document.getElementById("round-done-action")?.click();
 }, true);
 
 // ─────────────────────────────────────────────────────────────────────────────
