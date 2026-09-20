@@ -151,9 +151,10 @@ def create_app(
     """Create and configure the Flask application.
 
     Args:
-        root: Root directory containing simulation folders.  When ``None``
-            the app starts in *unconfigured* mode; the user must paste a path
-            via the browser UI before any data is shown.
+        root: Root directory containing simulation folders.  When ``None`` —
+            or when the path no longer exists — the app starts in
+            *unconfigured* mode; the user must paste a path via the browser UI
+            before any data is shown.
         db_path: Path for the SQLite DB file.  Defaults to
             ``{root}/labeler.db``.
         suggester_name: Name of the suggester to use (e.g. ``"dummy"``).
@@ -164,7 +165,16 @@ def create_app(
         A configured :class:`flask.Flask` instance.
     """
     if root is not None:
-        root = Path(root).resolve()
+        root = Path(root).expanduser().resolve()
+        # A saved root can disappear between launches — an external drive, a
+        # moved or renamed folder.  Starting unconfigured lets the UI ask for a
+        # new path; opening the DB under a missing directory would only raise
+        # "unable to open database file" before the app is even up.
+        if not root.is_dir():
+            print(f"Data root not found: {root}")
+            root = None
+
+    if root is not None:
         _configured = True
     else:
         # Use a throw-away temp dir so LabelDB can still initialise

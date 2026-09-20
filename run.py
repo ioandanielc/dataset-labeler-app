@@ -21,7 +21,7 @@ from labeler.api import LABELING_MODES, create_app
 
 _CONFIG_FILE = Path(__file__).parent / "labeler_config.json"
 
-DEFAULT_ROOT = "/Users/ioandanielcraciun/Downloads/output_data/"
+DEFAULT_ROOT = "/Users/ioandanielcraciun/Documents/dataset/raw/new_data_4"
 
 
 def _load_saved_root() -> str | None:
@@ -50,7 +50,10 @@ def main():
 
     url = f"http://localhost:{args.port}"
     print(f"Labeler running at {url}")
-    print(f"Data root: {root}")
+    if app.is_configured:
+        print(f"Data root: {app.data_root}")
+    else:
+        print("Data root: not set — open the page and use 📁 Path to pick the dataset folder")
     print(f"Mode:      {app.labeling_mode}")
     webbrowser.open(url)
 
