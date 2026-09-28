@@ -58,8 +58,10 @@ header {
 }
 header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
 header .spacer { flex: 1; }
-#global-stats { font-size: 13px; color: var(--muted); }
+#global-stats { font-size: 13px; color: var(--muted); white-space: nowrap; }
 #global-stats span { color: var(--text); font-weight: 500; }
+/* Only while labeling, where it sits next to this experiment's progress. */
+#global-stats.with-divider { border-left: 1px solid var(--border); padding-left: 12px; }
 
 #lb-back       { display: none; }
 #lb-exp-info   { display: none; font-size: 12px; color: var(--muted); }
@@ -1459,7 +1461,12 @@ function showLabelView() {
   // Hide the Reset Pass button in done/review stage — destructive and not needed there
   document.getElementById("lb-reset-btn").style.display     = (lb.readOnly || isDone) ? "none" : "inline-flex";
   document.getElementById("lb-progress-header").style.display = "block";
-  document.getElementById("global-stats").style.display     = "none";
+  // Dataset-wide progress stays on screen while labeling, beside this
+  // experiment's own count, so there is always a sense of the whole run.
+  const gs = document.getElementById("global-stats");
+  gs.style.display = "";
+  gs.classList.add("with-divider");
+  refreshGlobalStats();
 
   // Show/hide conflicts filter button
   const stage = lb.exp?.labeling_stage;
@@ -1488,7 +1495,9 @@ function closeLabelView() {
   document.getElementById("lb-reset-btn").style.display   = "none";
   document.getElementById("lb-agree-btn").style.display   = "none";
   document.getElementById("lb-progress-header").style.display = "none";
-  document.getElementById("global-stats").style.display   = "";
+  const gs = document.getElementById("global-stats");
+  gs.style.display = "";
+  gs.classList.remove("with-divider");
   loadDashboard();
 }
 
@@ -2131,6 +2140,9 @@ async function autoAssignFlags() {
     });
     lb.exp = updated;
     updateBoolButtons();
+    // Setting the flags is what tips an experiment over into "complete", so
+    // the dataset-wide count in the header can move here.
+    refreshGlobalStats();
   } catch {}
 }
 
@@ -2469,6 +2481,7 @@ async function setBool(field, value) {
     const updated = await patch(`/api/experiments/${lb.expId}`, { [field]: value });
     lb.exp = updated;
     updateBoolButtons();
+    refreshGlobalStats();   // a flag change can complete or un-complete this one
   } catch (e) {
     toast("Failed to update: " + e.message);
   }
